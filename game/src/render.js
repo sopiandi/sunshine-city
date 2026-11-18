@@ -98,13 +98,14 @@ export function createRenderer(canvas) {
         }
       }
     }
-    // Buildings with roofs and windows.
+    // Buildings with roofs and windows. v2 (A7): roofs and window rows
+    // differ per district — marina roofs are blue/teal, docks are rust.
     for (const b of city.buildings) {
       context.fillStyle = 'rgba(0,0,0,0.25)';
       context.fillRect(b.x + 5, b.y + 6, b.w, b.h);
       context.fillStyle = b.color;
       context.fillRect(b.x, b.y, b.w, b.h);
-      context.fillStyle = 'rgba(255,255,255,0.28)';
+      context.fillStyle = b.district === 'marina' ? 'rgba(255,255,255,0.45)' : b.district === 'docks' ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.28)';
       context.fillRect(b.x + 8, b.y + 8, b.w - 16, 10);
       context.fillStyle = 'rgba(0,0,0,0.35)';
       const cols = Math.max(2, Math.floor(b.w / 34));
@@ -116,6 +117,38 @@ export function createRenderer(canvas) {
         }
       }
     }
+    // v2 (A7): marina piers + boats, dock containers, district names.
+    for (const pier of city.piers || []) {
+      context.fillStyle = '#8b5a2b';
+      context.fillRect(pier.x, pier.y, pier.w, pier.h);
+      context.fillStyle = '#a4713b';
+      for (let x = pier.x + 8; x < pier.x + pier.w; x += 22) context.fillRect(x, pier.y, 3, pier.h);
+    }
+    for (const boat of city.boats || []) {
+      context.save();
+      context.translate(boat.x, boat.y);
+      context.rotate(boat.angle);
+      context.fillStyle = '#f1faee';
+      context.beginPath();
+      context.roundRect(-34, -12, 68, 24, 10);
+      context.fill();
+      context.fillStyle = '#2a9d8f';
+      context.fillRect(-10, -8, 22, 16);
+      context.restore();
+    }
+    for (const box of city.containers || []) {
+      context.fillStyle = box.color;
+      context.fillRect(box.x, box.y, box.w, box.h);
+      context.strokeStyle = 'rgba(0,0,0,0.4)';
+      context.lineWidth = 2;
+      context.strokeRect(box.x, box.y, box.w, box.h);
+    }
+    context.fillStyle = 'rgba(255,255,255,0.5)';
+    context.font = `bold 22px ${FONT}`;
+    context.textAlign = 'left';
+    context.textBaseline = 'alphabetic';
+    context.fillText('MARINA BAY', 3080, 420);
+    context.fillText('OLD DOCKS', 3060, 2080);
     // Palm trees.
     for (const palm of city.palms) {
       context.strokeStyle = '#8b5a2b';
@@ -158,7 +191,7 @@ export function createRenderer(canvas) {
     context.fillStyle = '#ffe66d';
     context.fillRect(40, -18, 3, 8);
     context.fillRect(40, 10, 3, 8);
-    if (car.kind === 'police') {
+    if (car.kind === 'police' || car.kind === 'roadblock') {
       context.fillStyle = '#fff';
       context.fillRect(-34, -20, 20, 40);
       context.fillStyle = '#111';
@@ -168,6 +201,17 @@ export function createRenderer(canvas) {
       context.beginPath(); context.arc(-2, -20, 7, 0, Math.PI * 2); context.fill();
       context.fillStyle = flash ? '#2d6bff' : '#ff2d2d';
       context.beginPath(); context.arc(-2, 20, 7, 0, Math.PI * 2); context.fill();
+    }
+    // v2 (B2): a damaged car smokes — thicker as health drops.
+    if (car.health < 55) {
+      const puffs = car.health < 25 ? 3 : 2;
+      for (let i = 0; i < puffs; i += 1) {
+        const rise = ((now / 300 + i * 0.7) % 1) * 34;
+        context.fillStyle = `rgba(120,120,120,${0.55 - rise / 90})`;
+        context.beginPath();
+        context.arc(-28 + i * 14, -24 - rise, 8 + rise / 4, 0, Math.PI * 2);
+        context.fill();
+      }
     }
     context.restore();
   }
@@ -226,7 +270,7 @@ export function createRenderer(canvas) {
     const p = state.player;
     // Top-left: cash, health, ammo.
     context.fillStyle = PALETTE.panel;
-    context.fillRect(16, 16, 250, 92);
+    context.fillRect(16, 16, 250, p.inCar ? 122 : 92);
     text(`$${p.cash}`, 30, 52, 30, PALETTE.cash, 'left', 'alphabetic');
     plainText(`Missions ${state.missionsDone}/5`, 150, 48, 16, PALETTE.text, 'left', 'alphabetic');
     context.fillStyle = '#333';
@@ -235,12 +279,23 @@ export function createRenderer(canvas) {
     context.fillRect(30, 62, 180 * clamp(p.health / 100, 0, 1), 14);
     plainText(`${Math.max(0, Math.round(p.health))} HP`, 218, 75, 13, PALETTE.text, 'left', 'alphabetic');
     plainText(p.inCar ? 'IN CAR — E to exit' : `Ammo ${p.ammo} / ${p.reserve}${p.reload > 0 ? '  reloading…' : ''}`, 30, 100, 14, PALETTE.muted, 'left', 'alphabetic');
-    // Wanted stars, top centre.
+    if (p.inCar) {
+      // v2 (B2): the driven car's health, so damage is visible before it stalls.
+      context.fillStyle = '#333';
+      context.fillRect(30, 108, 180, 8);
+      context.fillStyle = p.inCar.health > 40 ? '#ffb703' : PALETTE.danger;
+      context.fillRect(30, 108, 180 * clamp(p.inCar.health / 100, 0, 1), 8);
+      plainText('CAR', 218, 116, 11, PALETTE.muted, 'left', 'alphabetic');
+    }
+    // Wanted stars, top centre. v2 (A4): they pulse big + red while the
+    // flash timer runs right after the wanted level goes up.
+    const flashing = state.wantedFlash > 0;
+    const starSize = flashing ? 34 + Math.sin(now / 90) * 5 : 34;
     const stars = '★'.repeat(state.wanted) + '☆'.repeat(5 - state.wanted);
-    text(stars, VIEW.width / 2, 52, 34, state.wanted > 0 ? PALETTE.danger : 'rgba(255,255,255,0.55)', 'center', 'alphabetic');
+    text(stars, VIEW.width / 2, 52, starSize, state.wanted > 0 ? PALETTE.danger : 'rgba(255,255,255,0.55)', 'center', 'alphabetic');
     if (state.wanted > 0) plainText('WANTED', VIEW.width / 2, 76, 13, PALETTE.danger, 'center', 'alphabetic');
     drawMinimap(state, ui.target);
-    // Mission banner under the top bar.
+    // Mission banner under the top bar. v2 (A3): live distance to the target.
     if (ui.mission) {
       context.fillStyle = PALETTE.panel;
       const label = `${ui.mission.title} — ${ui.mission.objective}`;
@@ -248,8 +303,34 @@ export function createRenderer(canvas) {
       context.fillStyle = PALETTE.accent;
       context.fillRect(VIEW.width / 2 - 330, 92, 6, 44);
       plainText(label, VIEW.width / 2 - 312, 112, 16, PALETTE.text, 'left', 'alphabetic');
-      const sub = ui.missionTimer > 0 ? `Time left: ${Math.ceil(ui.missionTimer)}s` : (ui.target ? ui.target.label : '');
+      let sub = ui.missionTimer > 0 ? `Time left: ${Math.ceil(ui.missionTimer)}s` : (ui.target ? ui.target.label : '');
+      if (ui.target) {
+        const metres = Math.round(Math.hypot(ui.target.x - p.x, ui.target.y - p.y) / 4);
+        sub = `${ui.target.label} — ${metres} m${ui.missionTimer > 0 ? `  •  ${Math.ceil(ui.missionTimer)}s left` : ''}`;
+      }
       plainText(sub, VIEW.width / 2 - 312, 130, 13, PALETTE.accent, 'left', 'alphabetic');
+    }
+    // v2 (A3): off-screen edge arrow — always points at the mission target.
+    if (ui.target) {
+      const tx = ui.target.x - p.x;
+      const ty = ui.target.y - p.y;
+      const distPx = Math.hypot(tx, ty);
+      if (distPx > 420) {
+        const ang = Math.atan2(ty, tx);
+        const ax = VIEW.width / 2 + Math.cos(ang) * 300;
+        const ay = VIEW.height / 2 + Math.sin(ang) * 190;
+        context.save();
+        context.translate(clamp(ax, 40, VIEW.width - 40), clamp(ay, 130, VIEW.height - 60));
+        context.rotate(ang);
+        context.fillStyle = PALETTE.accent;
+        context.beginPath();
+        context.moveTo(18, 0);
+        context.lineTo(-12, -12);
+        context.lineTo(-12, 12);
+        context.closePath();
+        context.fill();
+        context.restore();
+      }
     }
     // Message toast.
     if (state.message && state.messageTimer > 0) {
@@ -259,7 +340,7 @@ export function createRenderer(canvas) {
       plainText(state.message, VIEW.width / 2, VIEW.height - 68, 15, '#fff', 'center', 'alphabetic');
     }
     // Bottom hints and speed.
-    plainText('WASD move / drive   •   E steal or exit car   •   Mouse aim, Click shoot   •   R reload   •   Shift run   •   P pause   •   M sound', 16, VIEW.height - 16, 13, 'rgba(255,255,255,0.75)', 'left', 'alphabetic');
+    plainText('WASD move / drive   •   E steal or exit car   •   Mouse aim, Click or Space shoot   •   R reload   •   Shift run   •   P pause   •   M sound', 16, VIEW.height - 16, 13, 'rgba(255,255,255,0.75)', 'left', 'alphabetic');
     if (p.inCar) {
       const speed = Math.round(Math.abs(p.inCar.speed) * 0.18);
       text(`${speed}`, VIEW.width - 60, VIEW.height - 44, 44, '#fff', 'right', 'alphabetic');
@@ -291,7 +372,11 @@ export function createRenderer(canvas) {
     const p = state.player;
     const camX = clamp(p.x - VIEW.width / 2, 0, WORLD.width - VIEW.width);
     const camY = clamp(p.y - VIEW.height / 2, 0, WORLD.height - VIEW.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x - camX * view.scale, view.y - camY * view.scale);
+    // v2 (B2): screen shake after a hard crash, scaled to the impact.
+    const shake = state.shake || 0;
+    const shX = shake > 0 ? (Math.random() - 0.5) * shake * 14 : 0;
+    const shY = shake > 0 ? (Math.random() - 0.5) * shake * 14 : 0;
+    context.setTransform(view.scale, 0, 0, view.scale, view.x - camX * view.scale + shX, view.y - camY * view.scale + shY);
     drawCity(state, camX, camY, now);
     // Mission target beacon.
     if (ui.target && screen === SCREEN_PLAY) {
@@ -339,6 +424,14 @@ export function createRenderer(canvas) {
       context.beginPath(); context.arc(ped.x, ped.y, 10, 0, Math.PI * 2); context.fill();
       context.fillStyle = '#f1c27d';
       context.beginPath(); context.arc(ped.x, ped.y - 4, 5, 0, Math.PI * 2); context.fill();
+      // v2 (A4): a fleeing pedestrian shows a "!" — the panic reads at a glance.
+      if (ped.flee > 0) {
+        context.fillStyle = '#e63946';
+        context.font = `bold 20px ${FONT}`;
+        context.textAlign = 'center';
+        context.textBaseline = 'alphabetic';
+        context.fillText('!', ped.x, ped.y - 18);
+      }
     }
     for (const e of state.enemies) {
       if (e.health <= 0) continue;
@@ -370,6 +463,27 @@ export function createRenderer(canvas) {
       context.beginPath(); context.moveTo(p.x, p.y); context.lineTo(p.x + Math.cos(p.aimAngle) * 26, p.y + Math.sin(p.aimAngle) * 26); context.stroke();
       // Aim crosshair at the mouse (screen space is drawn later; this is the world gun line only).
     }
+    // v2 (A2): "E — steal car" floats above the nearest car on foot.
+    if (screen === SCREEN_PLAY && !p.inCar) {
+      let hintCar = null;
+      let hintD = 110;
+      for (const car of state.cars) {
+        if (car.dead || car.kind === 'police' || car.kind === 'roadblock') continue;
+        const d = Math.hypot(car.x - p.x, car.y - p.y);
+        if (d < hintD) { hintD = d; hintCar = car; }
+      }
+      if (hintCar) {
+        const label = 'E — steal car';
+        context.font = `bold 15px ${FONT}`;
+        const w = context.measureText(label).width + 18;
+        context.fillStyle = 'rgba(12,18,28,0.85)';
+        context.fillRect(hintCar.x - w / 2, hintCar.y - 62, w, 26);
+        context.fillStyle = '#ffb703';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(label, hintCar.x, hintCar.y - 48);
+      }
+    }
     // Back to screen space for HUD and panels.
     context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
     if (screen === SCREEN_PLAY || screen === SCREEN_PAUSED) drawHud(state, ui, now);
@@ -377,13 +491,16 @@ export function createRenderer(canvas) {
       context.fillStyle = 'rgba(6,10,18,0.55)';
       context.fillRect(0, 0, VIEW.width, VIEW.height);
       text('SUNSHINE CITY', VIEW.width / 2, 190, 72, '#ffb703', 'center', 'alphabetic');
-      plainText('A sunny coastal city. One newcomer. Five jobs. One king.', VIEW.width / 2, 232, 20, '#fff', 'center', 'alphabetic');
+      plainText('v2 — A sunny coastal city. One newcomer. Five jobs. One king.', VIEW.width / 2, 232, 20, '#fff', 'center', 'alphabetic');
       plainText('Kai Reyes came to Sunshine City with $40 and a duffel bag.', VIEW.width / 2, 272, 16, PALETTE.muted, 'center', 'alphabetic');
       plainText('Mara Solano has jobs. Vic Delgado has the docks. The city has room for one more king.', VIEW.width / 2, 298, 16, PALETTE.muted, 'center', 'alphabetic');
       const lines = [
-        'WASD move / drive  •  E steal or exit a car  •  Mouse aim, Click to shoot',
-        'R reload  •  Shift run  •  P pause  •  M sound  •  Progress saves automatically',
-        ui.hasSave ? `Saved game found — best cash $${best}. Press Enter to continue.` : `Best cash so far: $${best}.`,
+        'WASD move / drive  •  E steal or exit a car  •  Mouse aim, Click or Space to shoot',
+        'Space — shoot / confirm  •  R reload  •  Shift run  •  P pause  •  M sound',
+        // v2 (A1): the title names the save — mission, cash, time — instead
+        // of only saying one exists. Progress saves automatically on pause,
+        // on mission completion and every 10 seconds of play.
+        ui.saveSummary || (ui.hasSave ? `Saved game found — best cash $${best}. Press Enter to continue.` : `Best cash so far: $${best}.`),
       ];
       lines.forEach((line, i) => plainText(line, VIEW.width / 2, 360 + i * 30, 16, '#fff', 'center', 'alphabetic'));
       text(ui.hasSave ? 'ENTER — CONTINUE    •    N — NEW GAME' : 'ENTER — START', VIEW.width / 2, 500, 22, PALETTE.accent, 'center', 'alphabetic');

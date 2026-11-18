@@ -2,7 +2,13 @@
 // Roads are a grid of avenues (vertical) and streets (horizontal); the
 // blocks between them hold buildings, parks and parking lots. The beach
 // and sea run down the whole west edge. Nothing here names a real place.
-import { BUILDING_COLORS, WORLD } from './config.js';
+import { BUILDING_COLORS, CONTAINER_COLORS, DOCKS_COLORS, MARINA_COLORS, WORLD } from './config.js';
+
+export function districtOf(x, y) {
+  if (x > 2900 && y < 900) return 'marina';
+  if (x > 2900 && y > 2000) return 'docks';
+  return 'city';
+}
 
 export const ROADS_V = [600, 1100, 1600, 2100, 2600, 3100];
 export const ROADS_H = [350, 850, 1350, 1850, 2300];
@@ -42,6 +48,9 @@ export function buildCity(random) {
   const parks = [];
   const palms = [];
   const lots = [];
+  const piers = [];
+  const boats = [];
+  const containers = [];
   const roadSetV = new Set(ROADS_V);
   const roadSetH = new Set(ROADS_H);
   void roadSetV;
@@ -79,7 +88,11 @@ export function buildCity(random) {
         : { x: x0 + 8, y: mid + 8, w: x1 - x0 - 16, h: y1 - mid - 16 };
       for (const b of [first, second]) {
         if (b.w < 60 || b.h < 60) continue;
-        buildings.push({ ...b, color: BUILDING_COLORS[Math.floor(random() * BUILDING_COLORS.length)] });
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        const district = districtOf(cx, cy);
+        const palette = district === 'marina' ? MARINA_COLORS : district === 'docks' ? DOCKS_COLORS : BUILDING_COLORS;
+        buildings.push({ ...b, color: palette[Math.floor(random() * palette.length)], district });
       }
       if (random() < 0.6) {
         palms.push({ x: x0 + 14, y: y0 + 14 });
@@ -89,13 +102,34 @@ export function buildCity(random) {
   }
   // Palm-lined beach.
   for (let y = 120; y < WORLD.height; y += 180) palms.push({ x: 320 + random() * 40, y });
-  return { buildings, parks, palms, lots };
+  // v2 (A7): Marina Bay — wooden piers and moored boats along the east edge
+  // road (the marina basin), and Old Docks — stacked shipping containers.
+  for (let i = 0; i < 4; i += 1) {
+    const py = 420 + i * 130;
+    piers.push({ x: 3400, y: py, w: 150, h: 26 });
+    boats.push({ x: 3300 + (i % 2) * 40, y: py + 52, angle: (random() - 0.5) * 0.5 });
+  }
+  for (let i = 0; i < 10; i += 1) {
+    containers.push({
+      x: 3050 + (i % 5) * 100, y: 2150 + Math.floor(i / 5) * 130,
+      w: 84, h: 40, color: CONTAINER_COLORS[i % CONTAINER_COLORS.length],
+    });
+  }
+  return { buildings, parks, palms, lots, piers, boats, containers };
 }
 
 export function isOnRoad(x, y) {
   for (const rx of ROADS_V) if (Math.abs(x - rx) < ROAD_W / 2) return true;
   for (const ry of ROADS_H) if (Math.abs(y - ry) < ROAD_W / 2) return true;
   return false;
+}
+
+// v2 (A9): off-road ground — parks and plain grass — slows a car to ~50%.
+// Parking lots are paved, so they count as road.
+export function isOffRoadSlow(parks, lots, x, y) {
+  if (isOnRoad(x, y)) return false;
+  for (const lot of lots) if (x > lot.x && x < lot.x + lot.w && y > lot.y && y < lot.y + lot.h) return false;
+  return true;
 }
 
 export function nearestRoadPoint(x, y) {

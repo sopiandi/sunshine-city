@@ -1,11 +1,31 @@
-// Sunshine City — every tuning number and colour in one place.
-// The world is a fixed 3600x2600 top-down city; the renderer scales a
-// 1280x720 camera view of it to the window, so no rule depends on screen size.
+// Sunshine City v2 — changelog (brief A–B; C not attempted, see report):
+// A1 save v2: full state (pos/health/cash/ammo/reserve/mission stage/
+//   checkpoint/package/timer/wanted/cars stolen/in-car), v1 save migrates.
+// A2 Space = shoot/confirm listed; "E — steal car" hint above nearest car.
+// A3 mission banner shows live distance in metres + off-screen edge arrow.
+// A4 shooting a ped: nearby peds flee 4 s, "!" panic marks, wanted stars flash.
+// A5 peds walk 95–165 px/s, varied, some pause, some cross roads.
+// A6 wanted decay 18 s -> 30 s/star; roadblocks at wanted 4–5.
+// A7 Marina Bay + Old Docks get own roof palettes, piers, boats, containers.
+// A8 traffic creeps (never 0 behind a queue unless bumper-to-bumper);
+//   police blocked >2 s reverse and turn away instead of sitting stuck.
+// A9 car cannot turn at a standstill; off-road (grass/park) caps speed at
+//   ~50%; steering more responsive at low speed.
+// B1 full touch controls: virtual joystick + SHOOT / CAR / RELOAD / PAUSE
+//   buttons, shown only on touch devices; tap aims + shoots.
+// B2 crash effects: car health shown as smoke when low, crash thud, screen
+//   shake scaled to impact; a car at 0 health stalls (no explosion).
+// B3 procedural WebAudio music loop (quiet, under SFX); M mutes music too;
+//   siren + engine volumes raised (they existed in v1, just too quiet).
+// v1 rules kept (section D): desktop controls, collision, HUD, 5 missions
+// and payouts, wanted both ways, procedural siren/engine, M mute.
 export const WORLD = { width: 3600, height: 2600 };
 export const VIEW = { width: 1280, height: 720 };
 export const STEP = 1 / 60;
-export const SAVE_KEY = 'sunshine-city.save.v1';
+export const SAVE_KEY = 'sunshine-city.save.v2';
+export const SAVE_KEY_V1 = 'sunshine-city.save.v1';
 export const BEST_KEY = 'sunshine-city.best';
+export const VERSION_LABEL = 'v2';
 
 export const PLAYER = {
   radius: 14,
@@ -36,7 +56,9 @@ export const CAR = {
 export const POLICE = { maxChase: 6, ramDamage: 3, shootRange: 420, shootCooldown: 2.8 };
 export const TRAFFIC_COUNT = 22;
 export const PED_COUNT = 30;
-export const WANTED_DECAY_SECONDS = 18;
+export const WANTED_DECAY_SECONDS = 30;
+export const PED_FLEE_SECONDS = 4;
+export const PED_FLEE_SPEED = 220;
 
 export const PALETTE = {
   sea: '#1d7fa8',
@@ -64,3 +86,9 @@ export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
 export const CAR_COLORS = ['#e63946', '#2a9d8f', '#f4a261', '#8e6cc8', '#e9c46a', '#457b9d', '#f1faee', '#6d6875'];
 export const BUILDING_COLORS = ['#d9a05b', '#c77d5a', '#a8b8c4', '#e0b089', '#9db4a0', '#c9a227', '#b5838d', '#8ecae6'];
+// v2 (A7): Marina Bay (east, y < 900) and Old Docks (east, y > 2000) read as
+// different districts — own roof palettes, piers + boats at the marina,
+// shipping containers at the docks. Buildings stay plain top-down boxes.
+export const MARINA_COLORS = ['#4fb3d9', '#2a9d8f', '#7fd1e8', '#e9f5f7', '#5bc0be'];
+export const DOCKS_COLORS = ['#8a5a33', '#6b4a2f', '#a4713b', '#7a6a55', '#946b2d'];
+export const CONTAINER_COLORS = ['#c0392b', '#2471a3', '#229954', '#d4ac0d', '#7d3c98'];

@@ -3,8 +3,8 @@
 // combat, pickups and the five story missions. step() advances one fixed
 // step and returns what happened as bit flags, so the caller can react
 // (sound, save, announcements) without the world knowing about screens.
-import { CAR, CAR_COLORS, PED_COUNT, PLAYER, POLICE, STEP, TRAFFIC_COUNT, WANTED_DECAY_SECONDS, WORLD } from './config.js';
-import { ROADS_H, ROADS_V, ROAD_W, buildCity, buildingAt, isOnRoad, nearestRoadPoint } from './city.js';
+import { CAR, CAR_COLORS, PED_COUNT, PED_FLEE_SECONDS, PED_FLEE_SPEED, PLAYER, POLICE, STEP, TRAFFIC_COUNT, WANTED_DECAY_SECONDS, WORLD } from './config.js';
+import { ROADS_H, ROADS_V, ROAD_W, buildCity, buildingAt, isOffRoadSlow, isOnRoad, nearestRoadPoint } from './city.js';
 import { MISSIONS } from './missions.js';
 
 export const EVENT_SHOOT = 1;
@@ -16,6 +16,7 @@ export const EVENT_HURT = 32;
 export const EVENT_BUSTED = 64;
 export const EVENT_WANTED = 128;
 export const EVENT_WIN = 256;
+export const EVENT_CRASH = 512;
 
 function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -35,7 +36,7 @@ export function createWorld(random) {
   const pickups = [];
   const state = {
     player, cars, peds, enemies, bullets, pickups, city,
-    wanted: 0, wantedTimer: 0, crimeTimer: 0,
+    wanted: 0, wantedTimer: 0, crimeTimer: 0, wantedFlash: 0, shake: 0,
     missionIndex: 0, mission: null, missionTimer: 0, missionStage: 0,
     checkpoint: 0, hasPackage: false, enemiesLeft: 0,
     elapsed: 0, message: '', messageTimer: 0, won: false, busted: false,
@@ -51,7 +52,10 @@ export function createWorld(random) {
     const before = state.wanted;
     state.wanted = clamp(state.wanted + n, 0, 5);
     state.crimeTimer = 0;
-    if (state.wanted > before) return EVENT_WANTED;
+    if (state.wanted > before) {
+      state.wantedFlash = 1.2;
+      return EVENT_WANTED;
+    }
     return 0;
   }
 
@@ -104,9 +108,9 @@ export function createWorld(random) {
       const along = (random() - 0.5) * 200;
       peds.push({
         x: pt.vertical ? pt.x + side : pt.x + along, y: pt.vertical ? pt.y + along : pt.y + side,
-        angle: random() * Math.PI * 2, speed: 45 + random() * 40,
+        angle: random() * Math.PI * 2, speed: 95 + random() * 70,
         color: ['#e76f51', '#2a9d8f', '#e9c46a', '#8e6cc8', '#f1faee'][i % 5],
-        flee: 0, down: false, downTimer: 0,
+        flee: 0, down: false, downTimer: 0, pause: 0, cross: 0,
       });
     }
   }
@@ -153,6 +157,7 @@ export function createWorld(random) {
     player.ammo = PLAYER.ammoMax; player.reserve = PLAYER.reserveMax;
     player.reload = 0; player.cooldown = 0; player.inCar = null;
     state.wanted = 0; state.wantedTimer = 0; state.crimeTimer = 0;
+    state.wantedFlash = 0; state.shake = 0; state.migratedSave = false;
     state.missionIndex = 0; state.elapsed = 0; state.won = false; state.busted = false;
     state.bestCash = 40; state.carsStolen = 0; state.missionsDone = 0;
     enemies.length = 0; bullets.length = 0;
@@ -181,6 +186,34 @@ export function createWorld(random) {
       if (d < bestD) { bestD = d; best = car; }
     }
     return best;
+  }
+
+  // v2 (A6): at wanted 4–5 the police park roadblock cars across the road
+  // ahead of the player. They are ordinary cars (kind 'roadblock') so the
+  // normal car-collision rules stop the player; they vanish below 4 stars.
+  function spawnRoadblocks() {
+    const have = cars.filter((c) => c.kind === 'roadblock' && !c.dead).length;
+    if (have >= 2) return;
+    const heading = player.angle;
+    const aheadX = player.x + Math.cos(heading) * 480;
+    const aheadY = player.y + Math.sin(heading) * 480;
+    const pt = nearestRoadPoint(clamp(aheadX, 320, WORLD.width - 100), clamp(aheadY, 100, WORLD.height - 100));
+    const roadAngle = pt.vertical ? Math.PI / 2 : 0;
+    for (let i = have; i < 2; i += 1) {
+      const off = (i === 0 ? -30 : 30);
+      cars.push({
+        id: 300 + i, kind: 'roadblock', color: '#1d3557',
+        x: clamp(pt.x + (pt.vertical ? 0 : off), 300, WORLD.width - 100),
+        y: clamp(pt.y + (pt.vertical ? off : 0), 100, WORLD.height - 100),
+        angle: roadAngle + Math.PI / 2, speed: 0, health: 200,
+        vertical: pt.vertical, dir: 1, stolen: false, dead: false,
+      });
+    }
+    say('Roadblock ahead!', 3);
+  }
+
+  function clearRoadblocks() {
+    for (const car of cars) if (car.kind === 'roadblock') car.dead = true;
   }
 
   function spawnPolice() {
@@ -225,23 +258,47 @@ export function createWorld(random) {
   function stepTraffic(dt) {
     for (const car of cars) {
       if (car.dead || car.kind !== 'traffic') continue;
-      // Slow down only for a car actually ahead on the same road, not for
-      // one behind (a player tailgating should not make traffic crawl).
-      let ahead = false;
+      // v2 (A8): a car behind a queue keeps creeping forward — it only
+      // stops bumper-to-bumper (<55 px), otherwise it crawls at 35 px/s.
+      // A stopped car ahead (parked, dead, or a stalled queue) is
+      // overtaken: the follower drifts to the side and passes it instead
+      // of queuing behind it forever.
+      let aheadCar = null;
+      let aheadD = Infinity;
       for (const other of cars) {
         if (other === car || other.dead) continue;
         const d = dist(car.x, car.y, other.x, other.y);
-        if (d >= 90) continue;
+        if (d >= 120) continue;
         const forward = Math.cos(car.angle) * (other.x - car.x) + Math.sin(car.angle) * (other.y - car.y);
-        if (forward > 0) { ahead = true; break; }
+        if (forward > 0 && d < aheadD) { aheadD = d; aheadCar = other; }
       }
-      const speed = ahead ? car.speed * 0.4 : car.speed;
-      const dx = Math.cos(car.angle) * speed * dt * car.dir;
-      const dy = Math.sin(car.angle) * speed * dt * car.dir;
+      const obstacleStopped = aheadCar && (aheadCar.kind !== 'traffic'
+        || (aheadCar.movingSpeed !== undefined ? aheadCar.movingSpeed : (aheadCar.speed || 0)) < 10);
+      if (obstacleStopped && aheadD < 120) {
+        if (!car.passing) { car.passing = true; car.passSide = car.id % 2 === 0 ? 1 : -1; }
+      } else if (car.passing && (!aheadCar || aheadD > 130)) {
+        car.passing = false;
+      }
+      let speed = aheadD < 55 ? 0 : aheadD < 120 ? 35 : car.speed;
+      let latX = 0;
+      let latY = 0;
+      if (car.passing) {
+        speed = 40;
+        latX = -Math.sin(car.angle) * car.passSide * 70;
+        latY = Math.cos(car.angle) * car.passSide * 70;
+      }
+      // The speed field on a traffic car is its cruise speed, not what it
+      // is doing right now — record the real one so the car behind can
+      // tell a stopped car from a moving one (head-on deadlock fix).
+      car.movingSpeed = speed;
+      const dx = Math.cos(car.angle) * speed * dt * car.dir + latX * dt;
+      const dy = Math.sin(car.angle) * speed * dt * car.dir + latY * dt;
       const nx = car.x + dx;
       const ny = car.y + dy;
       if (collideBuildings(nx, ny, 30)) {
-        car.dir *= -1;
+        // Turn around: flip the heading only. (v1 flipped dir AND angle,
+        // which cancel out — the car kept ramming the same wall forever
+        // while its angle spun without bound.)
         car.angle += Math.PI;
         continue;
       }
@@ -256,9 +313,30 @@ export function createWorld(random) {
         car.angle = car.vertical ? (random() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : (random() < 0.5 ? 0 : Math.PI);
         car.dir = 1;
       }
-      if (car.x <= 310 || car.x >= WORLD.width - 30 || car.y <= 30 || car.y >= WORLD.height - 30) {
-        car.dir *= -1;
+      // Flip only right at the clamp (2 px of hysteresis): the old 310 px
+      // threshold re-triggered on the very next frame, so the car
+      // flip-flopped east/west in place instead of driving away.
+      if (car.x <= 302 || car.x >= WORLD.width - 22 || car.y <= 22 || car.y >= WORLD.height - 22) {
         car.angle += Math.PI;
+      }
+      // Keep the heading bounded so it never spins up over a long session.
+      while (car.angle > Math.PI) car.angle -= Math.PI * 2;
+      while (car.angle < -Math.PI) car.angle += Math.PI * 2;
+    }
+    // Separation: two traffic cars that end up overlapping nudge apart so
+    // they never drive glued together as one blob.
+    for (const a of cars) {
+      if (a.dead || a.kind !== 'traffic') continue;
+      for (const b of cars) {
+        if (b === a || b.dead || b.kind !== 'traffic') continue;
+        const d = dist(a.x, a.y, b.x, b.y);
+        if (d > 0.01 && d < 48) {
+          const push = (48 - d) * 0.5 * dt * 8;
+          const ux = (a.x - b.x) / d;
+          const uy = (a.y - b.y) / d;
+          a.x += ux * push;
+          a.y += uy * push;
+        }
       }
     }
   }
@@ -282,14 +360,27 @@ export function createWorld(random) {
       const threatY = playerCar ? playerCar.y : player.y;
       const threatSpeed = playerCar ? Math.abs(playerCar.speed) : 0;
       const dThreat = dist(ped.x, ped.y, threatX, threatY);
-      if (dThreat < 120 && (threatSpeed > 200 || ped.flee > 0)) ped.flee = 1.5;
+      if (dThreat < 120 && (threatSpeed > 200 || ped.flee > 0)) ped.flee = PED_FLEE_SECONDS;
       if (ped.flee > 0) {
+        // v2 (A4): fleeing lasts 4 s at 220 px/s — far and long enough to
+        // read clearly — with a "!" panic mark drawn by the renderer.
         ped.flee -= dt;
         ped.angle = angleTo(threatX, threatY, ped.x, ped.y);
-        moveWithCollision(ped, Math.cos(ped.angle) * 150 * dt, Math.sin(ped.angle) * 150 * dt, 10);
+        moveWithCollision(ped, Math.cos(ped.angle) * PED_FLEE_SPEED * dt, Math.sin(ped.angle) * PED_FLEE_SPEED * dt, 10);
         continue;
       }
-      if (random() < 0.002) ped.angle = random() * Math.PI * 2;
+      // v2 (A5): some pedestrians pause for a moment, some cross the road.
+      if (ped.pause > 0) { ped.pause -= dt; continue; }
+      if (random() < 0.002) ped.pause = 0.8 + random() * 1.4;
+      if (ped.cross > 0) {
+        ped.cross -= dt;
+      } else if (random() < 0.0015) {
+        const pt = nearestRoadPoint(ped.x, ped.y);
+        ped.angle = angleTo(ped.x, ped.y, pt.x, pt.y);
+        ped.cross = 2.5;
+      } else if (random() < 0.002) {
+        ped.angle = random() * Math.PI * 2;
+      }
       moveWithCollision(ped, Math.cos(ped.angle) * ped.speed * dt, Math.sin(ped.angle) * ped.speed * dt, 10);
     }
   }
@@ -298,6 +389,11 @@ export function createWorld(random) {
     if (state.wanted > 0) {
       state.wantedTimer -= dt;
       if (state.wantedTimer <= 0) { spawnPolice(); state.wantedTimer = 2; }
+      // v2 (A6): roadblocks appear at wanted 4–5 and clear below 4.
+      if (state.wanted >= 4) spawnRoadblocks();
+      else clearRoadblocks();
+    } else {
+      clearRoadblocks();
     }
     let events = 0;
     for (const car of cars) {
@@ -320,7 +416,26 @@ export function createWorld(random) {
       else blocked = true;
       if (!collideBuildings(car.x, ny, 26)) car.y = ny;
       else blocked = true;
-      if (blocked) car.speed *= 0.7;
+      if (blocked) {
+        car.speed *= 0.7;
+        // v2 (A8): a police car stuck against a building for >2 s reverses
+        // and turns away instead of sitting there buzzing.
+        car.stuckTime = (car.stuckTime || 0) + dt;
+        if (car.stuckTime > 2) {
+          car.reverseTime = 0.9;
+          car.stuckTime = 0;
+        }
+      } else {
+        car.stuckTime = 0;
+      }
+      if (car.reverseTime > 0) {
+        car.reverseTime -= dt;
+        car.angle += 2.2 * dt;
+        const rx = car.x - Math.cos(car.angle) * 160 * dt;
+        const ry = car.y - Math.sin(car.angle) * 160 * dt;
+        if (!collideBuildings(rx, car.y, 26)) car.x = rx;
+        if (!collideBuildings(car.x, ry, 26)) car.y = ry;
+      }
       // Ram the player.
       if (d < 62) {
         car.speed *= 0.8;
@@ -390,6 +505,10 @@ export function createWorld(random) {
               ped.down = true;
               ped.downTimer = 6;
               dead = true;
+              // v2 (A4): everyone nearby sees it — they run, far and long.
+              for (const other of peds) {
+                if (!other.down && dist(other.x, other.y, ped.x, ped.y) < 320) other.flee = PED_FLEE_SECONDS;
+              }
               events |= addWanted(1);
               break;
             }
@@ -474,6 +593,8 @@ export function createWorld(random) {
     let events = 0;
     state.elapsed += dt;
     if (state.messageTimer > 0) state.messageTimer -= dt;
+    if (state.wantedFlash > 0) state.wantedFlash -= dt;
+    if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 1.8);
     if (player.cooldown > 0) player.cooldown -= dt;
     if (player.reload > 0) {
       player.reload -= dt;
@@ -538,7 +659,7 @@ export function createWorld(random) {
           life: PLAYER.bulletRange / PLAYER.bulletSpeed, fromPlayer: true, damage: PLAYER.bulletDamage,
         });
         events |= EVENT_SHOOT;
-        for (const ped of peds) if (dist(ped.x, ped.y, player.x, player.y) < 260) ped.flee = 1.5;
+        for (const ped of peds) if (dist(ped.x, ped.y, player.x, player.y) < 260) ped.flee = PED_FLEE_SECONDS;
       } else if (player.reserve > 0) {
         player.reload = PLAYER.reloadTime;
       }
@@ -549,48 +670,94 @@ export function createWorld(random) {
 
     if (player.inCar) {
       const car = player.inCar;
-      const accel = input.up ? 1 : input.down ? -1 : 0;
-      const steer = (input.left ? -1 : 0) + (input.right ? 1 : 0);
-      if (accel > 0) car.speed += CAR.accel * dt;
-      else if (accel < 0) car.speed += (car.speed > 0 ? -CAR.brake : -CAR.reverseAccel) * dt;
-      car.speed -= car.speed * CAR.drag * dt;
-      car.speed = clamp(car.speed, -CAR.maxReverse, CAR.maxSpeed);
-      if (Math.abs(car.speed) < 4 && accel === 0) car.speed = 0;
-      car.angle += steer * CAR.turnRate * dt * clamp(Math.abs(car.speed) / 220, 0.3, 1) * (car.speed < 0 ? -1 : 1);
-      const nx = car.x + Math.cos(car.angle) * car.speed * dt;
-      const ny = car.y + Math.sin(car.angle) * car.speed * dt;
-      // Move axis by axis so the car slides along a building wall instead of
-      // bouncing off a corner and getting stuck there. Speed is cut at most
-      // once a frame when a wall is hit, so the car can still pull away.
-      let blocked = false;
-      if (!collideBuildings(nx, car.y, 26)) car.x = clamp(nx, 260, WORLD.width - 20);
-      else blocked = true;
-      if (!collideBuildings(car.x, ny, 26)) car.y = clamp(ny, 20, WORLD.height - 20);
-      else blocked = true;
-      if (blocked) car.speed *= 0.7;
-      player.x = car.x; player.y = car.y; player.angle = car.angle;
-      // Running over pedestrians in a car.
-      for (const ped of peds) {
-        if (!ped.down && dist(ped.x, ped.y, car.x, car.y) < 42 && Math.abs(car.speed) > 90) {
-          ped.down = true; ped.downTimer = 6;
-          events |= addWanted(1);
-          say('You hit a pedestrian!', 2);
-        }
-      }
-      // Bumping traffic: do not drive through other cars. If the other car
-      // is ahead, match its speed (and nudge it along); otherwise just slow.
-      // Police cars are skipped here — their ram is handled in stepPolice.
-      for (const other of cars) {
-        if (other === car || other.dead || other.kind === 'police') continue;
-        if (dist(car.x, car.y, other.x, other.y) < 72) {
-          const ahead = Math.cos(car.angle) * (other.x - car.x) + Math.sin(car.angle) * (other.y - car.y) > 0;
-          if (ahead) {
-            car.speed = Math.min(car.speed, Math.max(other.speed || 0, 140));
-            if (other.kind === 'traffic') {
-              other.x += Math.cos(other.angle) * other.dir * 30 * dt;
-              other.y += Math.sin(other.angle) * other.dir * 30 * dt;
+      if (car.dead) {
+        // v2 (B2): a stalled car stays stalled — the player gets out on foot.
+        player.inCar = null;
+        player.x = car.x + 55;
+        player.y = car.y + 55;
+        say('The car broke down!', 3);
+      } else {
+        const accel = input.up ? 1 : input.down ? -1 : 0;
+        const steer = (input.left ? -1 : 0) + (input.right ? 1 : 0);
+        // v2 (A9): grass / parks cap speed at ~50% of road speed.
+        const offRoad = isOffRoadSlow(city.parks, city.lots, car.x, car.y);
+        const surface = offRoad ? 0.5 : 1;
+        const maxSpeed = CAR.maxSpeed * surface;
+        if (accel > 0) car.speed += CAR.accel * surface * dt;
+        else if (accel < 0) car.speed += (car.speed > 0 ? -CAR.brake : -CAR.reverseAccel) * dt;
+        car.speed -= car.speed * CAR.drag * dt;
+        car.speed = clamp(car.speed, -CAR.maxReverse, maxSpeed);
+        if (Math.abs(car.speed) < 4 && accel === 0) car.speed = 0;
+        // v2 (A9): a stopped car cannot turn in place. Steering is dead at
+        // 0 speed, then more responsive at low speed than v1's flat 0.3.
+        const spd = Math.abs(car.speed);
+        const turnFactor = spd < 5 ? 0 : clamp(0.55 + spd / 800, 0.55, 1);
+        car.angle += steer * CAR.turnRate * dt * turnFactor * (car.speed < 0 ? -1 : 1);
+        const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+        const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+        // Move axis by axis so the car slides along a building wall instead of
+        // bouncing off a corner and getting stuck there. Speed is cut at most
+        // once a frame when a wall is hit, so the car can still pull away.
+        let blocked = false;
+        if (!collideBuildings(nx, car.y, 26)) car.x = clamp(nx, 260, WORLD.width - 20);
+        else blocked = true;
+        if (!collideBuildings(car.x, ny, 26)) car.y = clamp(ny, 20, WORLD.height - 20);
+        else blocked = true;
+        if (blocked) {
+          // v2 (B2): a hard hit damages the car, shakes the screen and
+          // thuds — once per half second, not every frame of a scrape.
+          if (spd > 180 && (!car.crashCooldown || car.crashCooldown <= 0)) {
+            car.crashCooldown = 0.5;
+            car.health -= Math.round((spd - 180) / 12);
+            state.shake = clamp(spd / 320, 0.3, 1);
+            events |= EVENT_CRASH;
+            if (car.health <= 0) {
+              car.health = 0;
+              car.dead = true;
+              car.speed = 0;
+              say('The car broke down!', 3);
             }
-          } else car.speed *= 0.92;
+          }
+          car.speed *= 0.7;
+        }
+        if (car.crashCooldown) car.crashCooldown -= dt;
+        player.x = car.x; player.y = car.y; player.angle = car.angle;
+        // Running over pedestrians in a car.
+        for (const ped of peds) {
+          if (!ped.down && dist(ped.x, ped.y, car.x, car.y) < 42 && Math.abs(car.speed) > 90) {
+            ped.down = true; ped.downTimer = 6;
+            for (const other of peds) {
+              if (!other.down && dist(other.x, other.y, ped.x, ped.y) < 320) other.flee = PED_FLEE_SECONDS;
+            }
+            events |= addWanted(1);
+            say('You hit a pedestrian!', 2);
+          }
+        }
+        // Bumping traffic: do not drive through other cars. If the other car
+        // is ahead, match its speed (and nudge it along); otherwise just slow.
+        // Police cars are skipped here — their ram is handled in stepPolice.
+        // Roadblocks stop the player cold instead of being shoved aside.
+        for (const other of cars) {
+          if (other === car || other.dead || other.kind === 'police') continue;
+          if (dist(car.x, car.y, other.x, other.y) < 72) {
+            const ahead = Math.cos(car.angle) * (other.x - car.x) + Math.sin(car.angle) * (other.y - car.y) > 0;
+            if (other.kind === 'roadblock') {
+              car.speed *= 0.5;
+              if (Math.abs(car.speed) > 200 && (!car.crashCooldown || car.crashCooldown <= 0)) {
+                car.crashCooldown = 0.5;
+                car.health -= 8;
+                state.shake = 0.7;
+                events |= EVENT_CRASH;
+                if (car.health <= 0) { car.health = 0; car.dead = true; car.speed = 0; }
+              }
+            } else if (ahead) {
+              car.speed = Math.min(car.speed, Math.max(other.speed || 0, 140));
+              if (other.kind === 'traffic') {
+                other.x += Math.cos(other.angle) * other.dir * 30 * dt;
+                other.y += Math.sin(other.angle) * other.dir * 30 * dt;
+              }
+            } else car.speed *= 0.92;
+          }
         }
       }
     } else {
@@ -680,28 +847,83 @@ export function createWorld(random) {
     say('You woke up at Sunshine Clinic. -$100 hospital bill.', 5);
   }
 
+  // v2 (A1): the save holds the whole run — position, health, cash, ammo +
+  // reserve, mission progress (index, stage, checkpoint, package, timer),
+  // wanted level, cars stolen, and the car the player is sitting in.
+  // v1 saves (cash/mission/pos/health only) still load: the missing fields
+  // fall back to full ammo and the start of the current mission, honestly.
   function saveData() {
     return {
-      cash: player.cash, missionIndex: state.missionIndex, missionsDone: state.missionsDone,
+      version: 2,
+      cash: player.cash, missionIndex: state.missionIndex, missionStage: state.missionStage,
+      checkpoint: state.checkpoint, hasPackage: state.hasPackage, missionTimer: state.missionTimer,
+      missionsDone: state.missionsDone, wanted: state.wanted,
       bestCash: state.bestCash, carsStolen: state.carsStolen,
       x: player.x, y: player.y, health: player.health,
+      ammo: player.ammo, reserve: player.reserve,
+      inCarId: player.inCar ? player.inCar.id : null,
+      inCar: player.inCar ? {
+        id: player.inCar.id, x: player.inCar.x, y: player.inCar.y,
+        angle: player.inCar.angle, health: player.inCar.health, stolen: player.inCar.stolen,
+      } : null,
+      savedAt: Date.now(),
     };
   }
 
   function loadData(data) {
     if (!data || typeof data !== 'object') return false;
+    const migrated = data.version !== 2;
     player.cash = typeof data.cash === 'number' ? data.cash : 40;
     state.bestCash = Math.max(player.cash, data.bestCash || 0);
     state.missionsDone = data.missionsDone || 0;
     state.carsStolen = data.carsStolen || 0;
     state.missionIndex = Math.min(data.missionIndex || 0, MISSIONS.length - 1);
-    player.x = data.x || 320;
-    player.y = data.y || 1000;
-    player.health = data.health || PLAYER.health;
+    player.x = typeof data.x === 'number' ? data.x : 320;
+    player.y = typeof data.y === 'number' ? data.y : 1000;
+    player.health = typeof data.health === 'number' ? data.health : PLAYER.health;
+    player.ammo = typeof data.ammo === 'number' ? data.ammo : PLAYER.ammoMax;
+    player.reserve = typeof data.reserve === 'number' ? data.reserve : PLAYER.reserveMax;
+    player.inCar = null;
     startMission(state.missionIndex);
+    // Restore progress inside the mission — startMission reset it, so the
+    // saved stage/checkpoint/package/timer go back on top, in this order.
+    state.missionStage = data.missionStage || 0;
+    state.checkpoint = data.checkpoint || 0;
+    state.hasPackage = !!data.hasPackage;
+    if (typeof data.missionTimer === 'number') state.missionTimer = data.missionTimer;
+    state.wanted = clamp(data.wanted || 0, 0, 5);
+    state.crimeTimer = 0;
+    if (state.mission && state.mission.type === 'shootout' && state.missionStage === 1) {
+      spawnEnemiesAt(state.mission.target.x, state.mission.target.y, state.mission.enemies);
+    }
+    if (data.inCar && typeof data.inCar.id === 'number') {
+      const car = cars.find((c) => c.id === data.inCar.id);
+      if (car && !car.dead) {
+        car.x = data.inCar.x; car.y = data.inCar.y;
+        car.angle = data.inCar.angle; car.health = data.inCar.health;
+        car.stolen = !!data.inCar.stolen; car.speed = 0;
+        player.inCar = car;
+        player.x = car.x; player.y = car.y; player.angle = car.angle;
+      }
+    }
+    state.migratedSave = migrated;
     return true;
   }
 
+  // v2 (A2): the renderer asks for the nearest stealable car to draw the
+  // "E — steal car" hint above it.
+  function nearestCarForHint() {
+    if (player.inCar) return null;
+    let best = null;
+    let bestD = 110;
+    for (const car of cars) {
+      if (car.dead || car.kind === 'police' || car.kind === 'roadblock') continue;
+      const d = dist(player.x, player.y, car.x, car.y);
+      if (d < bestD) { bestD = d; best = car; }
+    }
+    return best;
+  }
+
   reset();
-  return { state, reset, step, startMission, missionTarget, respawnAfterBusted, saveData, loadData, say };
+  return { state, reset, step, startMission, missionTarget, respawnAfterBusted, saveData, loadData, say, nearestCarForHint };
 }

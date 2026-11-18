@@ -2,18 +2,48 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sunshine City — an original open-world crime game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sunshine City v2 — an original open-world crime game</title>
 <link rel="icon" href="data:,">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1220; }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* v2 (B1): touch controls — hidden unless a touch device is detected.
+     Joystick bottom-left, action buttons bottom-right, all >= 56px so a
+     thumb hits them; they never cover the top HUD or the minimap. */
+  #touch { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
+  #touch.on { display: block; }
+  #stick { position: absolute; left: 18px; bottom: 18px; width: 132px; height: 132px;
+    border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35);
+    pointer-events: auto; touch-action: none; }
+  #knob { position: absolute; left: 38px; top: 38px; width: 56px; height: 56px;
+    border-radius: 50%; background: rgba(255,183,3,0.85); }
+  .tbtn { position: absolute; pointer-events: auto; touch-action: none;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,0.4);
+    background: rgba(12,18,28,0.65); color: #fff; font: bold 15px system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center; text-align: center; }
+  .tbtn:active { background: rgba(255,183,3,0.8); color: #111; }
+  #btn-shoot { right: 18px; bottom: 96px; width: 76px; height: 76px; font-size: 17px; }
+  #btn-car { right: 106px; bottom: 30px; width: 60px; height: 60px; }
+  #btn-reload { right: 178px; bottom: 96px; width: 56px; height: 56px; }
+  #btn-pause { right: 18px; bottom: 186px; width: 56px; height: 56px; }
+  @media (max-width: 480px) {
+    #stick { width: 116px; height: 116px; }
+    #knob { left: 30px; top: 30px; }
+  }
 </style>
 </head>
 <body>
 <canvas id="game" aria-label="Sunshine City: explore a sunny coastal city on foot and by car, steal cars, escape the police, and finish five story missions"></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+<div id="touch" aria-hidden="true">
+  <div id="stick"><div id="knob"></div></div>
+  <button class="tbtn" id="btn-shoot" type="button">SHOOT</button>
+  <button class="tbtn" id="btn-car" type="button">CAR</button>
+  <button class="tbtn" id="btn-reload" type="button">R</button>
+  <button class="tbtn" id="btn-pause" type="button">II</button>
+</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
