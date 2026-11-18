@@ -15,4 +15,4 @@ node serve.ts
 
 ---
 
-<sub>Entered on [make.fun](https://make.fun/?ref=ckmjpt6d&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
+<sub>Entered on [make.fun](https://make.fun/?ref=nz5z89a8&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
