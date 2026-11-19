@@ -1,191 +1,106 @@
-// Keyboard and mouse input for Sunshine City, plus v2 (B1) touch controls.
-// Held keys give movement and driving; one-shot presses (enter a car,
-// reload, pause, confirm) are queued as flags and taken once by the loop,
-// so a press between frames is never lost and never counted twice. The
-// mouse position is kept in 1280x720 view coordinates; the caller turns it
-// into a world aim point.
-//
-// Touch: on a touch device the overlay (#touch) appears — a virtual
-// joystick bottom-left (8-way; pushed far = run / full gas) and SHOOT /
-// CAR / R / pause buttons bottom-right. SHOOT fires toward where the
-// player faces; tapping the canvas itself aims + shoots at that point.
-// Desktop is untouched: the overlay stays hidden and the mouse rules v1.
-import { VIEW } from './config.js';
-
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_ENTER = 4;
-export const ACTION_RELOAD = 8;
-export const ACTION_MUTE = 16;
-export const ACTION_NEW = 32;
-export const ACTION_QUIT = 64;
-
-const UP = new Set(['ArrowUp', 'KeyW']);
-const DOWN = new Set(['ArrowDown', 'KeyS']);
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Enter', 'Space']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let up = false;
-  let down = false;
-  let left = false;
-  let right = false;
-  let run = false;
-  let spaceHeld = false;
-  let mouseDown = false;
-  let mouseX = VIEW.width / 2;
-  let mouseY = VIEW.height / 2;
-  let actions = 0;
-
-  // --- touch state -------------------------------------------------------
-  const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-  let stickX = 0;
-  let stickY = 0;
-  let stickMag = 0;
-  let touchShoot = false;
-  let tapAim = null;
-  let tapAimTimer = 0;
-
-  function toView(event) {
-    const rect = target.getBoundingClientRect();
-    mouseX = ((event.clientX - rect.left) / rect.width) * VIEW.width;
-    mouseY = ((event.clientY - rect.top) / rect.height) * VIEW.height;
-  }
-
-  function bindButton(id, press, release) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      press();
-    });
-    el.addEventListener('pointerup', (event) => {
-      event.preventDefault();
-      if (release) release();
-    });
-    el.addEventListener('pointercancel', () => { if (release) release(); });
-    el.addEventListener('pointerleave', () => { if (release) release(); });
-  }
-
-  function setupTouch() {
-    const overlay = document.getElementById('touch');
-    if (!overlay) return;
-    overlay.classList.add('on');
-    const stick = document.getElementById('stick');
-    const knob = document.getElementById('knob');
-    let stickId = null;
-    function stickMove(event) {
-      const rect = stick.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-      let dx = (event.clientX - cx) / (rect.width / 2);
-      let dy = (event.clientY - cy) / (rect.height / 2);
-      const len = Math.hypot(dx, dy);
-      if (len > 1) { dx /= len; dy /= len; }
-      stickX = dx;
-      stickY = dy;
-      stickMag = Math.min(1, len);
-      knob.style.left = `${38 + dx * 34}px`;
-      knob.style.top = `${38 + dy * 34}px`;
-    }
-    function stickEnd() {
-      stickId = null;
-      stickX = 0; stickY = 0; stickMag = 0;
-      knob.style.left = '38px';
-      knob.style.top = '38px';
-    }
-    stick.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      stickId = event.pointerId;
-      stick.setPointerCapture(event.pointerId);
-      stickMove(event);
-    });
-    stick.addEventListener('pointermove', (event) => {
-      if (event.pointerId === stickId) stickMove(event);
-    });
-    stick.addEventListener('pointerup', stickEnd);
-    stick.addEventListener('pointercancel', stickEnd);
-    bindButton('btn-shoot', () => { touchShoot = true; }, () => { touchShoot = false; });
-    bindButton('btn-car', () => { actions |= ACTION_ENTER; });
-    bindButton('btn-reload', () => { actions |= ACTION_RELOAD; });
-    bindButton('btn-pause', () => { actions |= ACTION_PAUSE; });
-  }
-  if (isTouch) setupTouch();
-
-  window.addEventListener('keydown', (event) => {
-    if (UP.has(event.code)) up = true;
-    else if (DOWN.has(event.code)) down = true;
-    else if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') run = true;
-    else if (CONFIRM.has(event.code)) {
-      spaceHeld = event.code === 'Space';
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else if (event.code === 'KeyE') {
-      if (!event.repeat) actions |= ACTION_ENTER;
-    } else if (event.code === 'KeyR') {
-      if (!event.repeat) actions |= ACTION_RELOAD;
-    } else if (event.code === 'KeyM') {
-      if (!event.repeat) actions |= ACTION_MUTE;
-    } else if (event.code === 'KeyN') {
-      if (!event.repeat) actions |= ACTION_NEW;
-    } else if (event.code === 'KeyQ') {
-      if (!event.repeat) actions |= ACTION_QUIT;
-    } else return;
-    if (event.code !== 'F5') event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (UP.has(event.code)) up = false;
-    else if (DOWN.has(event.code)) down = false;
-    else if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-    else if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') run = false;
-    else if (event.code === 'Space') spaceHeld = false;
-  });
-  window.addEventListener('blur', () => {
-    up = false; down = false; left = false; right = false; run = false; spaceHeld = false; mouseDown = false;
-    touchShoot = false; stickX = 0; stickY = 0; stickMag = 0;
-  });
-  target.addEventListener('pointermove', toView);
-  target.addEventListener('pointerdown', (event) => {
-    toView(event);
-    mouseDown = true;
-    if (event.pointerType === 'touch') {
-      // Tap on the world: aim + shoot at that point for a short burst.
-      tapAim = { x: mouseX, y: mouseY };
-      tapAimTimer = 0.6;
-    }
-    actions |= ACTION_CONFIRM;
-  });
-  window.addEventListener('pointerup', () => { mouseDown = false; });
-
-  return {
-    isTouch,
-    snapshot() {
-      // Joystick overrides the keys while it is pushed.
-      const jUp = stickMag > 0.25 && stickY < -0.3;
-      const jDown = stickMag > 0.25 && stickY > 0.3;
-      const jLeft = stickMag > 0.25 && stickX < -0.3;
-      const jRight = stickMag > 0.25 && stickX > 0.3;
-      if (tapAimTimer > 0) tapAimTimer -= 1 / 60;
-      else tapAim = null;
-      return {
-        up: up || jUp, down: down || jDown, left: left || jLeft, right: right || jRight,
-        run: run || stickMag > 0.85,
-        shooting: mouseDown || spaceHeld || touchShoot || tapAim !== null,
-        touchFire: touchShoot,
-        mouseX, mouseY, tapAim,
-      };
-    },
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
+// Sunshine City v3 — keyboard, mouse and touch input.
+// Touch: virtual joystick (left) + big buttons (right), shown only on
+// touch devices. Tap the screen to shoot.
+export function makeInput(canvas) {
+  const inp = {
+    up: false, down: false, left: false, right: false, run: false,
+    joyActive: false, joyX: 0, joyY: 0,
+    mouseX: 0, mouseY: 0, mouseDown: false,
+    pressed: {}, // edge-triggered keys, consumed by the game loop
+    isTouch: false,
   };
+  const keyMap = {
+    KeyW: "up", ArrowUp: "up", KeyS: "down", ArrowDown: "down",
+    KeyA: "left", ArrowLeft: "left", KeyD: "right", ArrowRight: "right",
+    ShiftLeft: "run", ShiftRight: "run",
+  };
+  window.addEventListener("keydown", (e) => {
+    if (keyMap[e.code] !== undefined) { inp[keyMap[e.code]] = true; e.preventDefault(); }
+    if (!e.repeat) inp.pressed[e.code] = true;
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (keyMap[e.code] !== undefined) inp[keyMap[e.code]] = false;
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    const r = canvas.getBoundingClientRect();
+    inp.mouseX = e.clientX - r.left; inp.mouseY = e.clientY - r.top;
+  });
+  canvas.addEventListener("mousedown", (e) => {
+    inp.mouseDown = true;
+    const r = canvas.getBoundingClientRect();
+    inp.mouseX = e.clientX - r.left; inp.mouseY = e.clientY - r.top;
+    inp.pressed["Mouse"] = true;
+  });
+  window.addEventListener("mouseup", () => { inp.mouseDown = false; });
+
+  // ---- touch joystick + buttons ----
+  const joy = document.getElementById("joy");
+  const knob = document.getElementById("joy-knob");
+  const touchUI = document.getElementById("touch-ui");
+  let joyId = null, joyCX = 0, joyCY = 0;
+  function showTouch() {
+    if (inp.isTouch) return;
+    inp.isTouch = true;
+    if (touchUI) touchUI.classList.add("on");
+  }
+  window.addEventListener("touchstart", showTouch, { passive: true });
+  if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) showTouch();
+
+  function joyMove(t) {
+    const dx = t.clientX - joyCX, dy = t.clientY - joyCY;
+    const len = Math.hypot(dx, dy) || 1;
+    const cl = Math.min(len, 52);
+    inp.joyX = (dx / len) * (cl / 52);
+    inp.joyY = (dy / len) * (cl / 52);
+    if (knob) knob.style.transform = "translate(" + inp.joyX * 52 + "px," + inp.joyY * 52 + "px)";
+  }
+  if (joy) {
+    joy.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      showTouch();
+      const t = e.changedTouches[0];
+      joyId = t.identifier;
+      const r = joy.getBoundingClientRect();
+      joyCX = r.left + r.width / 2; joyCY = r.top + r.height / 2;
+      inp.joyActive = true;
+      joyMove(t);
+    }, { passive: false });
+  }
+  window.addEventListener("touchmove", (e) => {
+    if (joyId === null) return;
+    for (const t of e.changedTouches) if (t.identifier === joyId) { joyMove(t); e.preventDefault(); }
+  }, { passive: false });
+  window.addEventListener("touchend", (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === joyId) {
+        joyId = null; inp.joyActive = false; inp.joyX = 0; inp.joyY = 0;
+        if (knob) knob.style.transform = "translate(0px,0px)";
+      }
+    }
+  });
+  // Tap on the canvas (not on a button) shoots.
+  canvas.addEventListener("touchstart", (e) => {
+    showTouch();
+    const t = e.changedTouches[0];
+    const r = canvas.getBoundingClientRect();
+    inp.mouseX = t.clientX - r.left; inp.mouseY = t.clientY - r.top;
+    inp.pressed["Mouse"] = true;
+  }, { passive: true });
+
+  // Touch buttons: data-key maps to a pressed code.
+  document.querySelectorAll("#touch-ui [data-key]").forEach((btn) => {
+    btn.addEventListener("touchstart", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      showTouch();
+      inp.pressed[btn.getAttribute("data-key")] = true;
+    }, { passive: false });
+  });
+  return inp;
 }
+
+export function consumePress(inp, code) {
+  if (inp.pressed[code]) { delete inp.pressed[code]; return true; }
+  return false;
+}
+export function clearPresses(inp) { inp.pressed = {}; }

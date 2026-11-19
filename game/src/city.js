@@ -1,154 +1,117 @@
-// Sunshine City's map: one fixed coastal city, built once from the seed.
-// Roads are a grid of avenues (vertical) and streets (horizontal); the
-// blocks between them hold buildings, parks and parking lots. The beach
-// and sea run down the whole west edge. Nothing here names a real place.
-import { BUILDING_COLORS, CONTAINER_COLORS, DOCKS_COLORS, MARINA_COLORS, WORLD } from './config.js';
+// Sunshine City v3 — city layout: road grid, blocks, buildings, districts.
+// Marina Bay (south-west) and Old Docks (north-east) get their own palettes,
+// signs and street dressing so they read differently in a screenshot.
+import { WORLD, ROADS_X, ROADS_Y, ROAD_W, CLINIC, districtAt } from "./config.js";
+import { mulberry32, range, pick } from "./random.js";
 
-export function districtOf(x, y) {
-  if (x > 2900 && y < 900) return 'marina';
-  if (x > 2900 && y > 2000) return 'docks';
-  return 'city';
-}
-
-export const ROADS_V = [600, 1100, 1600, 2100, 2600, 3100];
-export const ROADS_H = [350, 850, 1350, 1850, 2300];
-export const ROAD_W = 96;
-export const BEACH_X = 380;
-
-export const DISTRICTS = [
-  { name: 'Palm Plaza', x: 700, y: 1050 },
-  { name: 'Marina Bay', x: 3150, y: 500 },
-  { name: 'Neon Row', x: 1600, y: 1350 },
-  { name: 'Old Docks', x: 3300, y: 2300 },
-  { name: 'Sunset Heights', x: 700, y: 2300 },
-  { name: 'Coral Market', x: 2100, y: 850 },
-];
-
-export const PLACES = {
-  playerSpawn: { x: 320, y: 1000 },
-  marina: { x: 3150, y: 500, label: 'Marina Bay' },
-  marketPickup: { x: 2100, y: 850, label: 'Coral Market' },
-  marketDrop: { x: 3100, y: 400, label: 'Marina Drop' },
-  hideout: { x: 650, y: 500, label: 'Hideout' },
-  docks: { x: 3300, y: 2300, label: 'Old Docks' },
-  penthouse: { x: 1600, y: 350, label: 'Palm Tower' },
-  hospital: { x: 1100, y: 1850, label: 'Sunshine Clinic' },
-};
-
-export const RACE_CHECKPOINTS = [
-  { x: 1100, y: 350 },
-  { x: 2100, y: 850 },
-  { x: 3100, y: 1350 },
-  { x: 1600, y: 1850 },
-  { x: 700, y: 2300 },
-];
-
-export function buildCity(random) {
+export function buildCity() {
+  const rng = mulberry32(20261119);
   const buildings = [];
-  const parks = [];
-  const palms = [];
-  const lots = [];
-  const piers = [];
-  const boats = [];
-  const containers = [];
-  const roadSetV = new Set(ROADS_V);
-  const roadSetH = new Set(ROADS_H);
-  void roadSetV;
-  void roadSetH;
-  // Blocks are the rectangles between neighbouring roads (plus the beach strip).
-  const xs = [BEACH_X + 60, ...ROADS_V, WORLD.width - 60];
-  const ys = [60, ...ROADS_H, WORLD.height - 60];
-  for (let bx = 0; bx < xs.length - 1; bx += 1) {
-    for (let by = 0; by < ys.length - 1; by += 1) {
-      const x0 = xs[bx] + ROAD_W / 2 + 24;
-      const x1 = xs[bx + 1] - ROAD_W / 2 - 24;
-      const y0 = ys[by] + ROAD_W / 2 + 24;
-      const y1 = ys[by + 1] - ROAD_W / 2 - 24;
-      if (x1 - x0 < 120 || y1 - y0 < 120) continue;
-      const roll = random();
-      if (roll < 0.16) {
-        parks.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
-        for (let p = 0; p < 5; p += 1) {
-          palms.push({ x: x0 + 30 + random() * (x1 - x0 - 60), y: y0 + 30 + random() * (y1 - y0 - 60) });
-        }
-        continue;
+  const trees = [];
+  const signs = [
+    { x: 350, y: 1520, text: "MARINA BAY" },
+    { x: 2100, y: 350, text: "OLD DOCKS" },
+    { x: 1350, y: 650, text: "DOWNTOWN" },
+    { x: 700, y: 1850, text: "MARINA BAY" },
+  ];
+  // One building (or two) per block between roads.
+  for (let ix = 0; ix < ROADS_X.length - 1; ix++) {
+    for (let iy = 0; iy < ROADS_Y.length - 1; iy++) {
+      const x0 = ROADS_X[ix] + ROAD_W / 2 + 14;
+      const x1 = ROADS_X[ix + 1] - ROAD_W / 2 - 14;
+      const y0 = ROADS_Y[iy] + ROAD_W / 2 + 14;
+      const y1 = ROADS_Y[iy + 1] - ROAD_W / 2 - 14;
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      const d = districtAt(cx, cy);
+      // Parking lots stay open: west of clinic + the north-west lot.
+      if (ix === 1 && iy === 2) continue; // starter lot (x 650-1000, y 1000-1350)
+      if (ix === 0 && iy === 1) continue; // north-west lot (x 300-650, y 650-1000)
+      const bw = x1 - x0, bh = y1 - y0;
+      const big = rng() > 0.45;
+      if (big) {
+        buildings.push(makeBuilding(cx - bw * 0.22, cy - bh * 0.22, bw * 0.4, bh * 0.4, d, rng));
+        buildings.push(makeBuilding(cx + bw * 0.22, cy + bh * 0.22, bw * 0.36, bh * 0.36, d, rng));
+      } else {
+        buildings.push(makeBuilding(cx, cy, bw * 0.62, bh * 0.62, d, rng));
       }
-      if (roll < 0.28) {
-        lots.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
-        continue;
-      }
-      // Two buildings per block, side by side or stacked.
-      const horizontal = (x1 - x0) > (y1 - y0);
-      const mid = horizontal ? (x0 + x1) / 2 : (y0 + y1) / 2;
-      const first = horizontal
-        ? { x: x0 + 8, y: y0 + 8, w: mid - x0 - 24, h: y1 - y0 - 16 }
-        : { x: x0 + 8, y: y0 + 8, w: x1 - x0 - 16, h: mid - y0 - 24 };
-      const second = horizontal
-        ? { x: mid + 8, y: y0 + 8, w: x1 - mid - 16, h: y1 - y0 - 16 }
-        : { x: x0 + 8, y: mid + 8, w: x1 - x0 - 16, h: y1 - mid - 16 };
-      for (const b of [first, second]) {
-        if (b.w < 60 || b.h < 60) continue;
-        const cx = b.x + b.w / 2;
-        const cy = b.y + b.h / 2;
-        const district = districtOf(cx, cy);
-        const palette = district === 'marina' ? MARINA_COLORS : district === 'docks' ? DOCKS_COLORS : BUILDING_COLORS;
-        buildings.push({ ...b, color: palette[Math.floor(random() * palette.length)], district });
-      }
-      if (random() < 0.6) {
-        palms.push({ x: x0 + 14, y: y0 + 14 });
-        palms.push({ x: x1 - 14, y: y1 - 14 });
+      // Street trees along block edges, denser in Marina Bay.
+      const nTree = d.name === "Marina Bay" ? 4 : d.name === "Old Docks" ? 1 : 2;
+      for (let t = 0; t < nTree; t++) {
+        trees.push({
+          x: range(rng, x0 + 8, x1 - 8), y: range(rng, y0 + 8, y1 - 8),
+          palm: d.name === "Marina Bay", r: range(rng, 7, 11),
+        });
       }
     }
   }
-  // Palm-lined beach.
-  for (let y = 120; y < WORLD.height; y += 180) palms.push({ x: 320 + random() * 40, y });
-  // v2 (A7): Marina Bay — wooden piers and moored boats along the east edge
-  // road (the marina basin), and Old Docks — stacked shipping containers.
-  for (let i = 0; i < 4; i += 1) {
-    const py = 420 + i * 130;
-    piers.push({ x: 3400, y: py, w: 150, h: 26 });
-    boats.push({ x: 3300 + (i % 2) * 40, y: py + 52, angle: (random() - 0.5) * 0.5 });
-  }
-  for (let i = 0; i < 10; i += 1) {
-    containers.push({
-      x: 3050 + (i % 5) * 100, y: 2150 + Math.floor(i / 5) * 130,
-      w: 84, h: 40, color: CONTAINER_COLORS[i % CONTAINER_COLORS.length],
-    });
-  }
-  return { buildings, parks, palms, lots, piers, boats, containers };
+  // The clinic itself, east side of the starter block.
+  buildings.push({
+    x: CLINIC.x + CLINIC.w / 2, y: CLINIC.y + CLINIC.h / 2,
+    w: CLINIC.w, h: CLINIC.h, color: "#ffffff", roof: "#d94f4f",
+    label: "CLINIC", cross: true,
+  });
+  // Dock cranes in Old Docks (visual only).
+  const cranes = [{ x: 2250, y: 420 }, { x: 2450, y: 620 }];
+  return { buildings, trees, signs, cranes };
 }
 
-export function isOnRoad(x, y) {
-  for (const rx of ROADS_V) if (Math.abs(x - rx) < ROAD_W / 2) return true;
-  for (const ry of ROADS_H) if (Math.abs(y - ry) < ROAD_W / 2) return true;
+function makeBuilding(x, y, w, h, d, rng) {
+  const palette = {
+    "Marina Bay": ["#f2e3c6", "#ffe9b8", "#e8d5a8"],
+    "Old Docks": ["#a9805a", "#96684a", "#b08a62"],
+    "Downtown": ["#cfd6e4", "#b9c4d6", "#dde3ee"],
+  }[d.name] || ["#cfd6e4"];
+  return {
+    x, y, w, h,
+    color: pick(rng, palette),
+    roof: d.accent,
+    label: rng() > 0.7 ? pick(rng, ["HOTEL", "MARKET", "CAFE", "GARAGE", "OFFICE", "BAR"]) : "",
+    cross: false,
+  };
+}
+
+// Circle (px,py,r) vs building rectangles: push the circle out, return hit info.
+export function collideBuildings(city, px, py, r) {
+  let hit = null;
+  for (const b of city.buildings) {
+    const nx = Math.max(b.x - b.w / 2, Math.min(px, b.x + b.w / 2));
+    const ny = Math.max(b.y - b.h / 2, Math.min(py, b.y + b.h / 2));
+    const dx = px - nx, dy = py - ny;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < r * r) {
+      const d = Math.sqrt(d2) || 0.001;
+      hit = { nx: px + (dx / d) * (r - d), ny: py + (dy / d) * (r - d), bx: b.x, by: b.y };
+      px = hit.nx; py = hit.ny;
+    }
+  }
+  return hit ? { x: px, y: py, hit: true } : { x: px, y: py, hit: false };
+}
+
+export function pointInBuilding(city, x, y) {
+  for (const b of city.buildings) {
+    if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) return true;
+  }
   return false;
 }
 
-// v2 (A9): off-road ground — parks and plain grass — slows a car to ~50%.
-// Parking lots are paved, so they count as road.
-export function isOffRoadSlow(parks, lots, x, y) {
-  if (isOnRoad(x, y)) return false;
-  for (const lot of lots) if (x > lot.x && x < lot.x + lot.w && y > lot.y && y < lot.y + lot.h) return false;
-  return true;
-}
-
-export function nearestRoadPoint(x, y) {
-  let best = null;
-  let bestD = Infinity;
-  for (const rx of ROADS_V) {
-    const d = Math.abs(x - rx);
-    if (d < bestD) { bestD = d; best = { x: rx, y, vertical: true }; }
-  }
-  for (const ry of ROADS_H) {
-    const d = Math.abs(y - ry);
-    if (d < bestD) { bestD = d; best = { x, y: ry, vertical: false }; }
-  }
+export function nearestRoadX(x) {
+  let best = ROADS_X[0], bd = 1e9;
+  for (const rx of ROADS_X) { const d = Math.abs(rx - x); if (d < bd) { bd = d; best = rx; } }
   return best;
 }
-
-export function buildingAt(buildings, x, y, pad) {
-  for (const b of buildings) {
-    if (x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad && y < b.y + b.h + pad) return b;
-  }
-  return null;
+export function nearestRoadY(y) {
+  let best = ROADS_Y[0], bd = 1e9;
+  for (const ry of ROADS_Y) { const d = Math.abs(ry - y); if (d < bd) { bd = d; best = ry; } }
+  return best;
+}
+export function onRoad(x, y) {
+  for (const rx of ROADS_X) if (Math.abs(x - rx) < ROAD_W / 2) return true;
+  for (const ry of ROADS_Y) if (Math.abs(y - ry) < ROAD_W / 2) return true;
+  return false;
+}
+export function worldBounds(x, y) {
+  return {
+    x: Math.max(20, Math.min(WORLD.w - 20, x)),
+    y: Math.max(20, Math.min(WORLD.h - 20, y)),
+  };
 }
