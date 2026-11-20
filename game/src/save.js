@@ -22,6 +22,7 @@ export function writeSave(S) {
       ? { color: S.car.color, x: S.car.x, y: S.car.y, hp: S.car.hp, angle: S.car.angle }
       : null;
     const data = {
+      version: "v4",
       x: S.player.x, y: S.player.y, hp: S.player.hp,
       money: S.money, missionIndex: S.missionIndex, stage: S.stage,
       ammo: S.ammo, reserve: S.reserve, wanted: S.wanted,

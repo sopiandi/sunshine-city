@@ -1,9 +1,10 @@
 // Sunshine City — all canvas drawing: the city, its people and cars,
 // the HUD, minimap and the edge arrow to the mission target.
 // Written fresh in this session for the v3 rebuild.
-import { WORLD_W, WORLD_H, VX, HY, ROAD_HALF, CAR_W, CAR_L, ENTER_RADIUS } from "./config.js";
-import { CITY, CLINIC, PARKING_LOT, districtAt, DISTRICTS } from "./city.js";
-import { missionTarget, missionText, MISSIONS } from "./missions.js";
+import { WORLD_W, WORLD_H, VX, HY, ROAD_HALF, CAR_W, CAR_L, WANTED_DECAY_SECONDS } from "./config.js";
+import { CITY, PARKING_LOT, DISTRICTS } from "./city.js";
+import { missionTarget, missionHint, MISSIONS } from "./missions.js";
+import { stealableCar } from "./world.js";
 import { dist } from "./config.js";
 
 function rr(ctx, x, y, w, h, r) {
@@ -343,8 +344,136 @@ export function drawWorld(ctx, S, view) {
   }
 }
 
-export function drawHUD(ctx, S, W, H, input) {
+// ---------- v4 HUD layout ----------
+// One layout function decides every HUD rect, canvas and DOM alike, so
+// nothing can clip or overlap at any width. The boxes are recorded on
+// S.hudBoxes each frame for the test harness to check.
+function hudLayout(W, H, inCar) {
   const pad = 12;
+  const narrow = W < 760;
+  const mw = narrow ? 104 : 168;
+  const mh = Math.round(mw * 0.78);
+  // Top-left cluster: money, HP bar, stars, ammo, car bar.
+  const clusterH = inCar ? 142 : 118;
+  // On narrow screens the pause button sits under the minimap (top 100,
+  // 44px tall) — reserve that row so the banner never sits on it.
+  const topH = Math.max(clusterH, 12 + mh + (narrow ? 60 : 0));
+  let banner = null;
+  if (!narrow) {
+    const bw = Math.min(460, W - 2 * (mw + 36));
+    if (bw >= 280) banner = { x: Math.round((W - bw) / 2), y: 10, w: Math.round(bw), h: 64 };
+  }
+  // Narrow: the banner drops below the whole top row — never on the
+  // minimap, never on the money cluster, never on the pause button.
+  if (!banner) banner = { x: pad, y: topH + 8, w: W - pad * 2, h: 64 };
+  // The notice line lives above the hint on tall screens; on short
+  // (landscape-phone) screens it moves above the hint further up so it
+  // never collides with the toast under the banner.
+  const noticeY = H >= 500 ? H - 122 : H - 152;
+  return {
+    pad, narrow, mw, mh, clusterH,
+    money: { x: pad, y: 12, w: 150, h: 22 },
+    hpBar: { x: pad, y: 44, w: 150, h: 14 },
+    stars: { x: pad, y: 66, w: 150, h: 26 },
+    ammo: { x: pad, y: 96, w: 150, h: 18 },
+    carBar: inCar ? { x: pad, y: 120, w: 150, h: 12 } : null,
+    minimap: { x: W - mw - pad, y: 12, w: mw, h: mh },
+    banner,
+    toast: { x: pad, y: banner.y + banner.h + 12, w: W - pad * 2, h: 64 },
+    hint: { x: Math.round(W / 2 - 110), y: H - 84, w: 220, h: 30 },
+    notice: { x: Math.round(W / 2 - 140), y: noticeY, w: 280, h: 22 },
+    district: { x: pad, y: H - 110, w: 220, h: 24 },
+  };
+}
+
+// DOM overlay text, kept in sync with the layout above. These elements
+// sit above the canvas in the page stacking order, so a building drawn
+// on the canvas can never cover a banner, a toast or a hint.
+const domCache = {};
+function setDom(id, text, show, rect) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const key = id + "|" + text + "|" + show;
+  if (domCache[id] !== key) {
+    domCache[id] = key;
+    el.textContent = text;
+    el.style.display = show ? "block" : "none";
+  }
+  if (rect && show) {
+    el.style.left = rect.x + "px";
+    el.style.top = rect.y + "px";
+    el.style.width = rect.w + "px";
+    if (rect.h) el.style.height = rect.h + "px";
+  }
+}
+function syncDomHud(S, L, W, H) {
+  // Mission banner: name, live stage + distance, and the stage hint.
+  const tgt = missionTarget(S);
+  const mi = S.missionIndex;
+  const name = mi < MISSIONS.length ? MISSIONS[mi].name : "Sunshine City";
+  const stage = mi < MISSIONS.length
+    ? MISSIONS[mi].stages[Math.min(S.stage, MISSIONS[mi].stages.length - 1)].text
+    : "Free roam — Sunshine City is yours";
+  const d = tgt ? Math.round(dist(S.player.x, S.player.y, tgt.x, tgt.y) / 8) : null;
+  const line = stage + (d !== null ? " · " + d + " m" : "");
+  const bannerEl = document.getElementById("mission-banner");
+  if (bannerEl) {
+    // While the heat is cooling off, the banner shows the countdown
+    // instead of the stage hint — the decay is visible, not silent.
+    const hintLine = S.decayActive
+      ? "Losing them… " + Math.ceil(WANTED_DECAY_SECONDS - S.decayT) + "s — stay out of sight"
+      : missionHint(S);
+    const key = name + "|" + line + "|" + hintLine;
+    if (domCache.banner !== key) {
+      domCache.banner = key;
+      document.getElementById("banner-name").textContent = name;
+      document.getElementById("banner-stage").textContent = line;
+      document.getElementById("banner-hint").textContent = hintLine;
+    }
+    bannerEl.style.display = S.mode === "play" || S.mode === "pause" ? "block" : "none";
+    bannerEl.style.left = L.banner.x + "px";
+    bannerEl.style.top = L.banner.y + "px";
+    bannerEl.style.width = L.banner.w + "px";
+  }
+  // Toast: the WANTED / mission-complete banner text.
+  if (S.msg) {
+    setDom("hud-toast", S.msg.text + "\n" + S.msg.sub, true, L.toast);
+    const el = document.getElementById("hud-toast");
+    if (el) el.style.opacity = String(Math.min(1, 3.2 - S.msg.t));
+  } else {
+    setDom("hud-toast", "", false, null);
+  }
+  // Context hint: exactly the car E would take (or the exit prompt).
+  const steal = !S.inCar ? stealableCar(S) : null;
+  if (steal) {
+    const dm = Math.round(dist(S.player.x, S.player.y, steal.x, steal.y) / 8);
+    setDom("hud-hint", "E — steal car · " + dm + " m", true, L.hint);
+    S.hintVisible = true;
+  } else if (S.inCar) {
+    setDom("hud-hint", "E — exit car", true, L.hint);
+    S.hintVisible = true;
+  } else {
+    setDom("hud-hint", "", false, null);
+    S.hintVisible = false;
+  }
+  // One notice line: reloading, a stalled car, or the arrest countdown.
+  let notice = "";
+  if (S.arrestT > 0 && S.arrestCop) {
+    notice = "BUSTED in " + Math.max(0, 2.0 - S.arrestT).toFixed(1) + "s — RUN!";
+  } else if (S.reloadT > 0) {
+    notice = "Reloading…";
+  } else if (S.inCar && S.car && S.car.hp <= 0) {
+    notice = "CAR STALLED — press E to get out";
+  }
+  setDom("hud-notice", notice, notice !== "", L.notice);
+  // District label, wide screens only (on a phone it sits on the joystick).
+  const showDistrict = S.districtT < 2.5 && W >= 480;
+  setDom("hud-district", showDistrict ? DISTRICTS[S.district].name : "", showDistrict, L.district);
+}
+
+export function drawHUD(ctx, S, W, H, input) {
+  const L = hudLayout(W, H, S.inCar && S.car);
+  const pad = L.pad;
   // Money + health, top-left.
   ctx.save();
   ctx.textAlign = "left";
@@ -358,132 +487,76 @@ export function drawHUD(ctx, S, W, H, input) {
   ctx.fillStyle = "#fff";
   ctx.font = "bold 11px sans-serif";
   ctx.fillText("HP " + Math.round(S.player.hp), pad + 4, 55);
-  // Wanted stars, top-left under health.
+  // Wanted stars, top-left under health. While the decay clock runs the
+  // last live star fades out — the countdown itself lives on the banner.
   const flash = S.starsFlash > 0 && Math.floor(S.time * 6) % 2 === 0;
   ctx.font = "bold 24px sans-serif";
   for (let i = 0; i < 5; i++) {
+    if (i === S.wanted - 1 && S.decayActive) {
+      ctx.globalAlpha = Math.max(0.15, 1 - S.decayT / WANTED_DECAY_SECONDS);
+    }
     ctx.fillStyle = i < S.wanted ? (flash ? "#fff" : "#ffd60a") : "rgba(255,255,255,0.28)";
-    ctx.fillText("★", pad + i * 28, 92);
+    ctx.fillText("★", pad + i * 28, 90);
+    ctx.globalAlpha = 1;
   }
-  if (S.wanted > 0) {
+  // "WANTED" label only where it fits clear of the minimap (wide screens).
+  if (S.wanted > 0 && !L.narrow) {
     ctx.fillStyle = flash ? "#ff4d4d" : "#fff";
     ctx.font = "bold 12px sans-serif";
     ctx.fillText("WANTED", pad + 148, 88);
   }
-  // Mission banner with live distance. Wide screens: top-centre. Narrow
-  // screens (phones): under the top row in two lines, clear of the minimap
-  // and of the touch controls at the bottom.
-  const tgt = missionTarget(S);
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  if (W < 480) {
-    const bw = W - 24, by = 100;
-    rr(ctx, 12, by, bw, 52, 9); ctx.fill();
-    const mi = S.missionIndex;
-    const name = mi < MISSIONS.length ? MISSIONS[mi].name : "Sunshine City";
-    const stage = mi < MISSIONS.length
-      ? MISSIONS[mi].stages[Math.min(S.stage, MISSIONS[mi].stages.length - 1)].text
-      : "Free roam — Sunshine City is yours";
-    ctx.fillStyle = "#ffd60a";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillText(name, W / 2, by + 20);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 13px sans-serif";
-    const d = tgt ? Math.round(dist(S.player.x, S.player.y, tgt.x, tgt.y) / 8) : null;
-    ctx.fillText(stage + (d !== null ? " · " + d + " m" : ""), W / 2, by + 41);
-  } else {
-    const bw = Math.min(W - 260, 460);
-    rr(ctx, W / 2 - bw / 2, 10, bw, 52, 9); ctx.fill();
-    ctx.fillStyle = "#ffd60a";
-    ctx.font = "bold 14px sans-serif";
-    ctx.fillText(missionText(S), W / 2, 30);
-    if (tgt) {
-      const d = Math.round(dist(S.player.x, S.player.y, tgt.x, tgt.y) / 8);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 15px sans-serif";
-      ctx.fillText(d + " m", W / 2, 52);
-    } else {
-      ctx.fillStyle = "#fff";
-      ctx.font = "13px sans-serif";
-      ctx.fillText("Mission " + Math.min(S.missionIndex + 1, 5) + " of 5", W / 2, 52);
-    }
-  }
-  // Ammo + car health, bottom-left.
-  ctx.textAlign = "left";
+  // Ammo + car health, top-left under the stars — never under the
+  // joystick or the touch buttons at the bottom of a phone screen.
   ctx.font = "bold 18px sans-serif";
   ctx.fillStyle = "#fff";
-  ctx.fillText("AMMO " + S.ammo + " / " + S.reserve, pad, H - 44);
+  ctx.fillText("AMMO " + S.ammo + " / " + S.reserve, pad, 112);
   if (S.inCar && S.car) {
     ctx.fillStyle = "rgba(0,0,0,0.45)";
-    rr(ctx, pad, H - 34, 150, 12, 6); ctx.fill();
+    rr(ctx, pad, 120, 150, 12, 6); ctx.fill();
     ctx.fillStyle = S.car.hp > 30 ? "#4da3ff" : "#ff4d4d";
-    rr(ctx, pad, H - 34, 150 * (S.car.hp / 100), 12, 6); ctx.fill();
+    rr(ctx, pad, 120, 150 * (S.car.hp / 100), 12, 6); ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.font = "bold 11px sans-serif";
-    ctx.fillText("CAR " + Math.round(S.car.hp), pad + 4, H - 25);
-    if (S.car.hp <= 0) {
-      ctx.fillStyle = "#ff4d4d";
-      ctx.font = "bold 14px sans-serif";
-      ctx.fillText("CAR STALLED — press E to get out", pad, H - 60);
+    ctx.fillText("CAR " + Math.round(S.car.hp), pad + 4, 131);
+  }
+  // Mission banner, toast, hint and notices live in the DOM overlay
+  // (syncDomHud above) — page text sits above the canvas, so a building
+  // can never cover it, and CSS keeps it inside the viewport.
+  syncDomHud(S, L, W, H);
+  // Record every visible HUD box for the test harness: canvas pieces
+  // from the layout, DOM pieces and touch controls measured live.
+  const boxes = [
+    { name: "money", ...L.money },
+    { name: "hp", ...L.hpBar },
+    { name: "stars", ...L.stars },
+    { name: "ammo", ...L.ammo },
+    { name: "minimap", ...L.minimap },
+    { name: "banner", ...L.banner },
+  ];
+  if (L.carBar) boxes.push({ name: "car", ...L.carBar });
+  if (S.msg) boxes.push({ name: "toast", ...L.toast });
+  if (S.hintVisible) boxes.push({ name: "hint", ...L.hint });
+  if (S.districtT < 2.5 && W >= 480) boxes.push({ name: "district", ...L.district });
+  if (input && input.touch) {
+    for (const id of ["joy-zone", "btn-shoot", "btn-car", "btn-reload", "btn-pause"]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) {
+        boxes.push({ name: id, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) });
+      }
     }
   }
-  // Context hint: same radius as the E key works at.
-  if (!S.inCar) {
-    const near = S.cars.some((c) => !c.driven && dist(S.player.x, S.player.y, c.x, c.y) < ENTER_RADIUS);
-    if (near) {
-      ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      rr(ctx, W / 2 - 90, H - 84, 180, 30, 8); ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 14px sans-serif";
-      ctx.fillText("E — steal car", W / 2, H - 64);
-    }
-  }
-  if (S.inCar) {
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    rr(ctx, W / 2 - 80, H - 84, 160, 30, 8); ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 13px sans-serif";
-    ctx.fillText("E — exit car", W / 2, H - 64);
-  }
-  // Toast message.
-  if (S.msg) {
-    ctx.textAlign = "center";
-    ctx.globalAlpha = Math.min(1, 3.2 - S.msg.t);
-    ctx.fillStyle = "#ffd60a";
-    ctx.font = "bold 26px sans-serif";
-    ctx.fillText(S.msg.text, W / 2, H * 0.3);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 15px sans-serif";
-    ctx.fillText(S.msg.sub, W / 2, H * 0.3 + 24);
-    ctx.globalAlpha = 1;
-  }
-  // District label when entering a new district (wide screens only —
-  // on a phone it would sit on the joystick).
-  if (S.districtT < 2.5 && W >= 480) {
-    ctx.textAlign = "left";
-    ctx.globalAlpha = Math.min(1, (2.5 - S.districtT) * 2);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText(DISTRICTS[S.district].name, pad, H - 110);
-    ctx.globalAlpha = 1;
-  }
-  // Reloading indicator.
-  if (S.reloadT > 0) {
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px sans-serif";
-    ctx.fillText("Reloading…", W / 2, H - 100);
-  }
-  drawMinimap(ctx, S, W, H);
+  S.hudBoxes = boxes;
+  drawMinimap(ctx, S, W, H, L);
   drawEdgeArrow(ctx, S, W, H);
+  ctx.restore();
 }
 
-function drawMinimap(ctx, S, W, H) {
-  const mw = W < 480 ? 104 : 168;
-  const mh = Math.round(mw * 0.78);
-  const mx = W - mw - 12, my = 12;
+function drawMinimap(ctx, S, W, H, L) {
+  const mw = L.mw;
+  const mh = L.mh;
+  const mx = L.minimap.x, my = L.minimap.y;
   const sx = mw / WORLD_W, sy = mh / WORLD_H;
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -550,8 +623,13 @@ function drawEdgeArrow(ctx, S, W, H) {
   ctx.lineWidth = 2;
   ctx.stroke();
   ctx.restore();
+  // Distance label: pulled toward the centre of the screen from the
+  // arrow and clamped inside the frame, so it never clips off an edge
+  // or sits on the ammo / touch controls at the bottom.
   ctx.fillStyle = "#fff";
   ctx.font = "bold 12px sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(d + " m", px, py + 26);
+  const lx = Math.max(48, Math.min(W - 48, px - ux * 30));
+  const ly = Math.max(64, Math.min(H - 24, py - uy * 30));
+  ctx.fillText(d + " m", lx, ly);
 }

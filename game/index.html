@@ -26,22 +26,45 @@
   #save-info, #pause-info, #dead-info { color: #9fe8b4; font-size: 14px; }
   .keys { font-size: 13px; color: #aab4c0; max-width: 560px; line-height: 1.7; margin-top: 10px; }
   .keys b { color: #fff; }
-  /* Touch controls: only on touch devices (JS adds .on). */
+  /* v4: DOM HUD overlay — page text above the canvas (z 18), below the
+     menu screens (z 20), so a building can never cover a banner. */
+  #hud-dom { position: fixed; inset: 0; z-index: 18; pointer-events: none; }
+  #mission-banner { position: absolute; display: none; height: 64px; overflow: hidden;
+    background: rgba(0,0,0,0.55); border-radius: 9px; padding: 5px 12px; text-align: center; }
+  #banner-name { color: #ffd60a; font-weight: bold; font-size: 14px; line-height: 1.25; }
+  #banner-stage { color: #fff; font-weight: bold; font-size: 15px; line-height: 1.25; }
+  #banner-hint { color: #cfe3ff; font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hud-toast { position: absolute; display: none; text-align: center; color: #ffd60a;
+    font-weight: bold; font-size: 26px; line-height: 1.2; white-space: pre-line;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-hint { position: absolute; display: none; text-align: center; background: rgba(0,0,0,0.6);
+    color: #fff; font-weight: bold; font-size: 14px; border-radius: 8px; line-height: 30px; }
+  #hud-notice { position: absolute; display: none; text-align: center; color: #fff;
+    font-weight: bold; font-size: 14px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  #hud-district { position: absolute; display: none; color: #fff; font-weight: bold;
+    font-size: 20px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  /* Touch controls: only on touch devices (JS adds .on). v4: brighter,
+     unmissable, and the pause button sits under the minimap on narrow
+     screens instead of on the mission banner. */
   #touch-ui { position: fixed; inset: 0; display: none; z-index: 15; pointer-events: none; }
   #touch-ui.on { display: block; }
   #joy-zone { position: absolute; left: 14px; bottom: 90px; width: 132px; height: 132px;
-    border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35);
+    border-radius: 50%; background: rgba(255,255,255,0.14); border: 2px solid rgba(255,255,255,0.55);
     pointer-events: auto; }
   #joy-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
-    border-radius: 50%; background: rgba(255,255,255,0.45); }
+    border-radius: 50%; background: rgba(255,255,255,0.6); }
   .tbtn { position: absolute; pointer-events: auto; min-width: 52px; min-height: 52px; padding: 0 12px;
-    border-radius: 12px; border: 2px solid rgba(255,255,255,0.5); background: rgba(20,26,34,0.65);
+    border-radius: 12px; border: 2px solid rgba(255,255,255,0.7); background: rgba(20,26,34,0.85);
     color: #fff; font-weight: bold; font-size: 14px; }
-  .tbtn:active { background: rgba(255,214,10,0.75); color: #111; }
-  #btn-shoot { right: 16px; bottom: 96px; width: 76px; height: 76px; border-radius: 50%; font-size: 15px; }
+  .tbtn:active { background: rgba(255,214,10,0.85); color: #111; }
+  #btn-shoot { right: 16px; bottom: 96px; width: 76px; height: 76px; border-radius: 50%;
+    font-size: 15px; background: rgba(255,214,10,0.9); color: #111; border-color: #fff; }
   #btn-car { right: 104px; bottom: 170px; }
   #btn-reload { right: 104px; bottom: 100px; }
   #btn-pause { right: 16px; top: 150px; }
+  @media (max-width: 759px) {
+    #btn-pause { top: 100px; right: 12px; width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+  }
   @media (max-width: 480px) {
     .screen h1 { font-size: 36px; }
     .screen p { font-size: 14px; }
@@ -49,12 +72,20 @@
     #btn-shoot { bottom: 76px; }
     #btn-car { bottom: 148px; }
     #btn-reload { bottom: 80px; }
-    #btn-pause { top: 170px; }
   }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+
+<!-- v4: DOM HUD overlay (mission banner, toast, hint, notices). -->
+<div id="hud-dom">
+  <div id="mission-banner"><div id="banner-name"></div><div id="banner-stage"></div><div id="banner-hint"></div></div>
+  <div id="hud-toast"></div>
+  <div id="hud-hint"></div>
+  <div id="hud-notice"></div>
+  <div id="hud-district"></div>
+</div>
 
 <div id="touch-ui">
   <div id="joy-zone"><div id="joy-knob"></div></div>
@@ -65,7 +96,7 @@
 </div>
 
 <div class="screen" id="screen-start">
-  <h1>SUNSHINE CITY <span class="v">v3</span></h1>
+  <h1>SUNSHINE CITY <span class="v">v4</span></h1>
   <p class="tag">An original open-world crime game — no Rockstar names, no borrowed assets.</p>
   <p>Kai Reyes is back in Sunshine City, broke and wanted. Steal a ride, outrun the
   Sunshine PD, run parcels for the marina crew and take the docks back — five missions,
@@ -100,6 +131,16 @@
     <button class="btn ghost" id="btn-quit2" onclick="document.getElementById('btn-quit').click()">Quit to Menu</button>
   </div>
   <p class="keys">Press <b>Space</b> to respawn.</p>
+</div>
+
+<div class="screen" id="screen-busted">
+  <h2>BUSTED</h2>
+  <p id="busted-info"></p>
+  <div>
+    <button class="btn" id="btn-busted-respawn">Walk Free</button>
+    <button class="btn ghost" id="btn-quit3" onclick="document.getElementById('btn-quit').click()">Quit to Menu</button>
+  </div>
+  <p class="keys">Press <b>Space</b> to walk free.</p>
 </div>
 
 <div class="screen" id="screen-done">

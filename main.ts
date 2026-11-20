@@ -14,6 +14,12 @@ import { buildDossier } from "./vendor/makefun-game.ts";
 const here = fileURLToPath(new URL(".", import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
+// v4: fail loudly instead of handing in a broken entry when the game
+// entrypoint is missing — the gate would refuse it anyway.
+if (!existsSync(join(here, "game", "index.html"))) {
+  throw new Error("Sunshine City v4: game/index.html is missing, refusing to build the entry");
+}
+
 mkdirSync(out, { recursive: true });
 cpSync(join(here, "game"), join(out, "game"), { recursive: true });
 mkdirSync(join(out, "screenshots"), { recursive: true });

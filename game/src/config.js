@@ -30,6 +30,23 @@ export const MISSION_RADIUS = 100;
 
 export const SAVE_KEY = "sunshine-city-v3";
 
+// --- v4: police, wanted and HUD tuning (fix build on top of v3) ---
+export const GAME_VERSION = "v4";
+// Police hold a ring around the player instead of driving into them.
+export const COP_STANDOFF_CAR = 112;   // px from the player's car centre
+export const COP_STANDOFF_FOOT = 72;   // px from the player on foot
+export const COP_SEPARATION = 66;      // px minimum between two police cars
+export const COP_BRAKE_RANGE = 135;    // px: brake when the player is ahead
+export const COP_SIGHT_RANGE = 500;    // px: a cop with line of sight blocks decay
+export const WANTED_DECAY_SECONDS = 30; // seconds hidden per star lost
+export const RAM_MAX_DAMAGE = 10;      // px: most HP one police touch can take
+export const RAM_MIN_HP = 1;           // a police ram can never kill
+export const ARREST_RANGE = 30;        // px: cop close + slow starts an arrest
+export const ARREST_SECONDS = 2.0;     // seconds held to be BUSTED
+export const STEAL_MAX_SPEED = 60;     // a car faster than this cannot be taken
+export const BUST_BAIL = 50;           // dollars lost when BUSTED
+
+
 export const CAR_COLORS = [
   "#e33f2f", "#2f7fe3", "#f2b705", "#37b24d", "#8a5cf6",
   "#e86ba8", "#12a5a0", "#f07b1d", "#c9ced6", "#3a3f4a",

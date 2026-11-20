@@ -33,15 +33,31 @@ joystick on the left and SHOOT / CAR / RELOAD / PAUSE buttons on the right.
   cross, panic and flee, two districts with their own look — Marina Bay and
   Old Docks — plus Downtown and Northside.
 - Wanted 0–5: stealing any car is +1, shooting in front of a witness is +1,
-  shooting a police car is +2. Police chase, shoot back at wanted 3+ and
-  set roadblocks at wanted 4–5; lose them and the stars decay one per
-  30 seconds.
+  shooting a police car is +2. Police hold a ring around you at a safe
+  standoff, brake when you are in front of them, and never stack on each
+  other; a touch on foot at low wanted is a BUSTED arrest (bail $50), at
+  high wanted they shoot instead — a police ram can never kill you. Break
+  line of sight and stay hidden and the stars decay one per 30 seconds,
+  with a live countdown on the banner and the fading star.
 - Five story missions ($200 / $400 / $500 / $600 / $1,000) with a live
   distance banner, an edge arrow and a minimap that never confuses the
   player dot with the target.
 - Full save / continue: position, health, money, mission + stage, ammo,
   wanted and the driven car — colour, position and health included.
 - Procedural WebAudio sound and music (M mutes everything).
+- Responsive HUD: the mission banner, toasts and hints are DOM overlays
+  above the canvas, so buildings can never cover them; at phone widths the
+  banner drops below the top row instead of overlapping the minimap, and
+  touch screens get a joystick plus SHOOT / CAR / RELOAD / PAUSE buttons.
+
+## v4 — police, wanted & HUD fix (20 Nov 2026)
+
+Play-tested on a phone, mission 1 failed twice to the police, so v4
+rewrites the pursuit: police standoff ring (never nose-to-nose, never
+blocking the car-park exit), no damage to a stationary car, capped
+non-lethal ram + BUSTED arrest, wanted decay with line-of-sight and a
+visible countdown, police separation, an honest steal hint (same check
+as the E key), and a responsive HUD with working touch controls.
 
 ## Entry
 

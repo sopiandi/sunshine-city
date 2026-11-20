@@ -5,9 +5,12 @@ import {
   WORLD_W, WORLD_H, VX, HY, ROAD_HALF, LANE, PLAYER_R, WALK_SPEED, RUN_SPEED,
   CAR_ACCEL, CAR_MAX, CAR_REV, MAX_PEDS, MAX_TRAFFIC, MAX_COPS, START_AMMO,
   START_RESERVE, SHOT_RANGE, WITNESS_RADIUS, ENTER_RADIUS, CAR_COLORS,
+  COP_STANDOFF_CAR, COP_STANDOFF_FOOT, COP_SEPARATION, COP_BRAKE_RANGE,
+  COP_SIGHT_RANGE, WANTED_DECAY_SECONDS, RAM_MAX_DAMAGE, RAM_MIN_HP,
+  ARREST_RANGE, ARREST_SECONDS, STEAL_MAX_SPEED, BUST_BAIL,
   clamp, dist, angleTo, angDiff, mulberry, pick,
 } from "./config.js";
-import { SPAWN, STARTER_CAR, PARKED_SPOTS, PARKING_LOT, CITY, collideBuildings, buildingHit } from "./city.js";
+import { SPAWN, STARTER_CAR, PARKED_SPOTS, PARKING_LOT, PARKING_EXIT, inExitCorridor, inParkingLot, CITY, collideBuildings, buildingHit } from "./city.js";
 
 const rng = mulberry(77031);
 const EXIT_BLOCK = { x: 880, y: 1120, w: 280, h: 130 }; // starter-car exit corridor: keep peds out
@@ -24,6 +27,11 @@ export function newGameState() {
     cars: [], peds: [], cops: [], roadblocks: [],
     effects: [], claims: {},
     money: 0, wanted: 0, lastCrime: -999, starsFlash: 0, lastHurt: -999,
+    // v4: wanted decay + arrest state. decayT counts up while no cop can
+    // see the player; decayActive is what the HUD countdown shows.
+    // arrestT counts up while a slow cop holds the player on foot.
+    decayT: 0, decayActive: false, arrestT: 0, arrestCop: null,
+    bustedCount: 0, bailPaid: 0, hintVisible: false, hudBoxes: [],
     missionIndex: 0, stage: 0, foesLeft: 0,
     ammo: START_AMMO, reserve: START_RESERVE, reloadT: 0,
     msg: null, district: "midtown", districtT: 0,
@@ -250,6 +258,106 @@ function updatePed(S, p, dt) {
 
 // ---------- police ----------
 export function wantedCopCount(w) { return [0, 1, 2, 3, 4, 6][w] || 0; }
+
+// ---------- v4 police behaviour ----------
+// Line of sight between two points: blocked when a building crosses the
+// segment. Sampled, not exact — cheap enough to run every frame.
+function hasLineOfSight(ax, ay, bx, by) {
+  for (let i = 1; i < 10; i++) {
+    const t = i / 10;
+    if (buildingHit(ax + (bx - ax) * t, ay + (by - ay) * t, 6)) return false;
+  }
+  return true;
+}
+// Does any cop currently see the player? Seeing needs closeness AND a
+// clear line of sight — ducking behind a block breaks it. This is what
+// gates wanted decay, so hiding behind buildings actually works.
+export function copSeesPlayer(S) {
+  const p = S.player;
+  for (const c of S.cops) {
+    const d = dist(c.x, c.y, p.x, p.y);
+    if (d < COP_SIGHT_RANGE && hasLineOfSight(c.x, c.y, p.x, p.y)) return true;
+  }
+  return false;
+}
+// Push two police cars apart so they never overlap or stack at a crossing.
+function separateCops(S) {
+  const cops = S.cops;
+  for (let a = 0; a < cops.length; a++) {
+    for (let b = a + 1; b < cops.length; b++) {
+      const ca = cops[a], cb = cops[b];
+      const dx = cb.x - ca.x, dy = cb.y - ca.y;
+      const d = Math.hypot(dx, dy);
+      if (d < COP_SEPARATION && d > 0.01) {
+        const push = (COP_SEPARATION - d) / 2;
+        const nx = dx / d, ny = dy / d;
+        ca.x -= nx * push; ca.y -= ny * push;
+        cb.x += nx * push; cb.y += ny * push;
+      } else if (d <= 0.01) {
+        cb.x += COP_SEPARATION / 2;
+        cb.y += 8;
+      }
+    }
+  }
+}
+// Each cop holds its own slot on a ring around the player — never on top
+// of the player, never on top of another cop, and never in the parking
+// lot's exit corridor, so a stolen car can always drive out.
+function copSlot(S, index, count) {
+  const p = S.player;
+  const ring = S.inCar ? COP_STANDOFF_CAR : (S.wanted >= 3 ? 110 : COP_STANDOFF_FOOT);
+  const ang = (index / Math.max(1, count)) * Math.PI * 2;
+  let sx = p.x + Math.cos(ang) * ring;
+  let sy = p.y + Math.sin(ang) * ring;
+  // Keep the slot out of the parking lot itself.
+  if (inParkingLot(sx, sy, 28)) {
+    const left = sx - (PARKING_LOT.x - 28);
+    const right = PARKING_LOT.x + PARKING_LOT.w + 28 - sx;
+    const top = sy - (PARKING_LOT.y - 28);
+    const bottom = PARKING_LOT.y + PARKING_LOT.h + 28 - sy;
+    const m = Math.min(left, right, top, bottom);
+    if (m === left) sx = PARKING_LOT.x - 28;
+    else if (m === right) sx = PARKING_LOT.x + PARKING_LOT.w + 28;
+    else if (m === top) sy = PARKING_LOT.y - 28;
+    else sy = PARKING_LOT.y + PARKING_LOT.h + 28;
+  }
+  // Never block the lot's exit lane: flip to the far side of the ring.
+  if (inExitCorridor(sx, sy)) {
+    sx = p.x - Math.cos(ang) * ring;
+    sy = p.y - Math.sin(ang) * ring;
+  }
+  return { x: sx, y: sy };
+}
+// Arrested on foot at low wanted: bail, wanted cleared, BUSTED screen.
+function bustPlayer(S, sound) {
+  if (S.mode !== "play") return;
+  S.bustedCount++;
+  const bail = Math.min(BUST_BAIL, S.money);
+  S.money -= bail;
+  S.bailPaid = bail;
+  S.wanted = 0;
+  S.decayT = 0;
+  S.arrestT = 0;
+  S.arrestCop = null;
+  S.lastCrime = S.time;
+  S.mode = "busted";
+  S.over = "busted";
+  S.msg = { text: "BUSTED", sub: "Bail paid: $" + bail, t: 0 };
+  if (sound) sound.busted();
+}
+// A police touch on a pedestrian: at most RAM_MAX_DAMAGE, and never
+// lethal — the floor keeps at least RAM_MIN_HP. The player is shoved
+// clear instead of being ground under the bumper.
+function policeTouchPlayer(S, cop) {
+  const p = S.player;
+  if (cop.hitCd > 0) return;
+  cop.hitCd = 2.0;
+  const dmg = Math.min(RAM_MAX_DAMAGE, Math.max(0, S.player.hp - RAM_MIN_HP));
+  if (dmg > 0) damagePlayer(S, dmg);
+  const a = angleTo(cop.x, cop.y, p.x, p.y);
+  p.x = clamp(p.x + Math.cos(a) * 26, 30, WORLD_W - 30);
+  p.y = clamp(p.y + Math.sin(a) * 26, 30, WORLD_H - 30);
+}
 function spawnCop(S) {
   // Spawn on a road intersection 450–650 px from the player.
   for (let tries = 0; tries < 20; tries++) {
@@ -268,37 +376,62 @@ function spawnCop(S) {
 }
 function updateCops(S, dt, sound) {
   const want = wantedCopCount(S.wanted);
-  while (S.cops.length < want) spawnCop(S);
+  let guard = 0;
+  while (S.cops.length < want && guard++ < 8) spawnCop(S);
   if (S.wanted === 0) {
     for (const c of S.cops) { const i = S.cars.indexOf(c); if (i >= 0) S.cars.splice(i, 1); }
     S.cops = [];
+    S.arrestT = 0;
+    S.arrestCop = null;
     return;
   }
   S.cops = S.cops.filter((c) => c.hp > 0 && S.cars.includes(c));
-  for (const c of S.cops) {
+  const p = S.player;
+  let arresting = null;
+  for (let ci = 0; ci < S.cops.length; ci++) {
+    const c = S.cops[ci];
     if (c.bumpCd > 0) c.bumpCd -= dt;
-    const p = S.player;
+    if (c.hitCd > 0) c.hitCd -= dt;
     const d = dist(c.x, c.y, p.x, p.y);
-    const wantAngle = angleTo(c.x, c.y, p.x, p.y);
-    // Steer toward the player; if a building is right ahead, veer off.
+    // Drive to this cop's ring slot, never straight at the player.
+    const slot = copSlot(S, ci, S.cops.length);
+    const sd = dist(c.x, c.y, slot.x, slot.y);
     const noseX = c.x + Math.cos(c.angle) * 40, noseY = c.y + Math.sin(c.angle) * 40;
-    let steer = wantAngle;
+    let steer = angleTo(c.x, c.y, slot.x, slot.y);
     if (buildingHit(noseX, noseY, 12)) steer = c.angle + 0.9;
     c.angle += clamp(angDiff(c.angle, steer), -3.0 * dt, 3.0 * dt);
     let target = c.cruise;
-    if (d < 48) target = 0; // hold off and shoot — don't grind-ram the player
-    else if (d < 120) target = 120; // close in, don't orbit
+    if (sd < 45) target = 0;                    // hold the slot
+    else if (sd < 160) target = Math.min(target, 110);
     for (const o of S.cars) {
       if (o === c || o.kind !== "traffic") continue;
       if (dist(c.x, c.y, o.x, o.y) < 55) { target = Math.min(target, 60); break; }
     }
-    c.speed += clamp(target - c.speed, -400 * dt, 320 * dt);
+    // Brake hard when the player is right in front of the car.
+    const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    const relX = p.x - c.x, relY = p.y - c.y;
+    const fwd = relX * fx + relY * fy;
+    const lat = Math.abs(relX * -fy + relY * fx);
+    if (fwd > 0 && fwd < COP_BRAKE_RANGE && lat < 34) target = 0;
+    if (!S.inCar && d < COP_STANDOFF_FOOT + 18) target = 0;
+    const braking = target < c.speed;
+    c.speed += clamp(target - c.speed, (braking ? -800 : -400) * dt, 320 * dt);
+    if (c.speed < 0) c.speed = 0;
     c.x += Math.cos(c.angle) * c.speed * dt;
     c.y += Math.sin(c.angle) * c.speed * dt;
     c.x = clamp(c.x, 60, WORLD_W - 60);
     c.y = clamp(c.y, 60, WORLD_H - 60);
-    if (c.hitCd > 0) c.hitCd -= dt;
-    // Shoot at wanted 3+ when close enough.
+    // Never touch or overlap the player's car: hold the ring, shove out.
+    if (S.inCar && S.car) {
+      const cd = dist(c.x, c.y, S.car.x, S.car.y);
+      if (cd < 64 && cd > 0.01) {
+        const nx = (c.x - S.car.x) / cd, ny = (c.y - S.car.y) / cd;
+        c.x = S.car.x + nx * 64;
+        c.y = S.car.y + ny * 64;
+        c.speed *= 0.5;
+      }
+    }
+    // Shoot at wanted 3+ when close enough — guns, not bumpers.
     c.shootCd -= dt;
     if (S.wanted >= 3 && d < 430 && c.shootCd <= 0) {
       c.shootCd = rand(1.1, 1.8);
@@ -310,13 +443,24 @@ function updateCops(S, dt, sound) {
       }
       if (sound) sound.shoot();
     }
-    // Ram the player on foot — one ram hit at a time, whatever the pack does.
-    if (!S.inCar && d < 26 && c.hitCd <= 0 && !(S.ramCd > 0)) {
-      c.hitCd = 1.2;
-      S.ramCd = 1.2;
-      damagePlayer(S, 10);
+    // On foot: a touch is a glancing hit (capped, never lethal), and a
+    // slow cop holding the player at low wanted makes an arrest, not a kill.
+    if (!S.inCar && d < 26) {
+      policeTouchPlayer(S, c);
+      if (S.wanted <= 2 && Math.abs(c.speed) < 60 && d < ARREST_RANGE) arresting = c;
     }
     if (rng() < dt * 0.25 && sound) sound.siren();
+  }
+  // Cops keep their distance from each other — no stacking, ever.
+  separateCops(S);
+  // Arrest clock: only a cop holding the player still runs it down.
+  if (arresting) {
+    S.arrestT += dt;
+    S.arrestCop = arresting;
+    if (S.arrestT >= ARREST_SECONDS) bustPlayer(S, sound);
+  } else {
+    S.arrestT = Math.max(0, S.arrestT - dt * 2);
+    if (S.arrestT === 0) S.arrestCop = null;
   }
 }
 function updateRoadblocks(S) {
@@ -336,18 +480,39 @@ function updateRoadblocks(S) {
     S.roadblocks.push({ x: px, y: py, angle: rand(0, Math.PI) });
   }
 }
-export function updateWanted(S) {
-  if (S.wanted <= 0) return;
-  if (S.time - S.lastCrime < 30) return;
-  const near = S.cops.some((c) => dist(c.x, c.y, S.player.x, S.player.y) < 500);
-  if (near) return;
-  S.wanted--;
-  S.lastCrime = S.time;
-  if (S.wanted === 0) S.msg = { text: "You lost them.", sub: "Wanted level clear", t: 0 };
+export function updateWanted(S, dt, sound) {
+  if (S.wanted <= 0) { S.decayT = 0; S.decayActive = false; return; }
+  // A fresh crime buys the heat 30 seconds of attention; after that the
+  // clock runs only while no cop can actually see the player — outrun
+  // them, or break line of sight behind a block, and the stars fade one
+  // per 30 seconds. Hiding in plain sight in front of a cop never counts.
+  if (S.time - S.lastCrime < 2) { S.decayActive = false; return; }
+  if (copSeesPlayer(S)) {
+    S.decayT = 0;
+    S.decayActive = false;
+    return;
+  }
+  S.decayActive = true;
+  S.decayT += dt;
+  if (S.decayT >= WANTED_DECAY_SECONDS) {
+    S.decayT = 0;
+    S.wanted--;
+    S.starsFlash = 1.0;
+    if (sound) sound.decay();
+    if (S.wanted === 0) {
+      S.msg = { text: "You lost them.", sub: "Wanted level clear", t: 0 };
+    } else {
+      S.msg = { text: "Heat cooling off", sub: "Wanted level " + S.wanted, t: 0 };
+    }
+  }
 }
 export function addWanted(S, n, reason, sound) {
   S.wanted = Math.min(5, S.wanted + n);
   S.lastCrime = S.time;
+  S.decayT = 0;
+  S.decayActive = false;
+  S.arrestT = 0;
+  S.arrestCop = null;
   S.starsFlash = 1.4;
   S.msg = { text: "WANTED", sub: reason, t: 0 };
   if (sound) sound.siren();
@@ -384,9 +549,19 @@ export function nearestCar(S, x, y, maxD) {
   }
   return best;
 }
+// v4: the one car the E key can actually take right now — the same
+// predicate the HUD hint uses, so the hint never lies. A car is
+// stealable when it is in E range AND slow enough to climb into: a
+// traffic car flashing past at speed is not. Parked cars always qualify.
+export function stealableCar(S) {
+  const c = nearestCar(S, S.player.x, S.player.y, ENTER_RADIUS);
+  if (!c) return null;
+  if (Math.abs(c.speed || 0) > STEAL_MAX_SPEED) return null;
+  return c;
+}
 export function enterCar(S, sound) {
   if (S.inCar) { exitCar(S); return true; }
-  const c = nearestCar(S, S.player.x, S.player.y, ENTER_RADIUS);
+  const c = stealableCar(S);
   if (!c) return false;
   const wasTraffic = c.kind === "traffic";
   const wasCop = c.kind === "cop";
@@ -449,8 +624,11 @@ function carVsCars(S, car) {
         if (!o.driven && o.kind === "traffic") { o.x -= nx * push; o.y -= ny * push; }
       }
       const rel = Math.abs(car.speed - (o.speed || 0));
-      // One damaging bump per scrape, not one per frame while wedged.
-      if (rel > 200 && !(car.bumpCd > 0) && !(o.bumpCd > 0)) {
+      // v4: a stationary car takes NO damage, and a police car never
+      // damages the player's car — it holds a ring and yields instead.
+      // Only a real moving crash chips the paint, once per scrape.
+      const parked = Math.abs(car.speed) < 40;
+      if (!parked && o.kind !== "cop" && rel > 200 && !(car.bumpCd > 0) && !(o.bumpCd > 0)) {
         car.hp = Math.max(0, car.hp - Math.min(12, rel / 30));
         if (o.kind !== "traffic") o.hp = Math.max(0, (o.hp || 100) - 8);
         car.bumpCd = 0.8; o.bumpCd = 0.8;
@@ -641,7 +819,6 @@ export function updateFoes(S, dt, sound) {
 export function updateWorld(S, dt, input, sound) {
   S.time += dt;
   if (S.starsFlash > 0) S.starsFlash -= dt;
-  if (S.ramCd > 0) S.ramCd -= dt;
   if (S.msg) { S.msg.t += dt; if (S.msg.t > 3.2) S.msg = null; }
   // Reload timer.
   if (S.reloadT > 0) {
@@ -676,7 +853,20 @@ export function updateWorld(S, dt, input, sound) {
   updateFoes(S, dt, sound);
   updateCops(S, dt, sound);
   updateRoadblocks(S);
-  updateWanted(S);
+  updateWanted(S, dt, sound);
+  // v4 safety net: police cars physically never rest overlapped either,
+  // whatever the pursuit AI did — same push-apart as traffic gets.
+  for (let a = 0; a < S.cops.length; a++) for (let b = a + 1; b < S.cops.length; b++) {
+    const ca = S.cops[a], cb = S.cops[b];
+    const dx = cb.x - ca.x, dy = cb.y - ca.y;
+    const d = Math.hypot(dx, dy);
+    if (d < COP_SEPARATION && d > 0.01) {
+      const push = (COP_SEPARATION - d) / 2;
+      const nx = dx / d, ny = dy / d;
+      ca.x -= nx * push; ca.y -= ny * push;
+      cb.x += nx * push; cb.y += ny * push;
+    }
+  }
   // Effects age out.
   for (const e of S.effects) e.t += dt;
   S.effects = S.effects.filter((e) => e.t < e.life);

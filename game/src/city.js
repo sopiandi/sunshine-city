@@ -6,6 +6,19 @@ export const SPAWN = { x: 1330, y: 1125 };
 export const CLINIC = { x: 1380, y: 900, w: 160, h: 120 };
 export const STARTER_CAR = { x: 980, y: 1180, angle: 0, color: "#e33f2f" };
 export const PARKING_LOT = { x: 900, y: 1150, w: 150, h: 140 };
+// v4: the lane a stolen car drives out of the lot on (east, along y 1130-1230).
+// Police standoff slots are never placed inside this corridor, so the exit
+// is never blocked. The lot rect itself is also kept clear of cop slots.
+export const PARKING_EXIT = { x: 900, y: 1130, w: 260, h: 100 };
+export function inExitCorridor(x, y) {
+  return x > PARKING_EXIT.x && x < PARKING_EXIT.x + PARKING_EXIT.w
+    && y > PARKING_EXIT.y && y < PARKING_EXIT.y + PARKING_EXIT.h;
+}
+export function inParkingLot(x, y, margin) {
+  const m = margin || 0;
+  return x > PARKING_LOT.x - m && x < PARKING_LOT.x + PARKING_LOT.w + m
+    && y > PARKING_LOT.y - m && y < PARKING_LOT.y + PARKING_LOT.h + m;
+}
 export const PARKED_SPOTS = [
   { x: 620, y: 780, angle: 0, color: "#12a5a0" },
   { x: 1500, y: 420, angle: Math.PI / 2, color: "#f2b705" },

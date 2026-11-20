@@ -7,7 +7,7 @@ import { Input } from "./input.js";
 import { readSave, writeSave, saveSummary } from "./save.js";
 import {
   newGameState, updateWorld, shoot, enterCar, damagePlayer,
-  wantedCopCount, addWanted,
+  wantedCopCount, addWanted, stealableCar,
 } from "./world.js";
 import { drawWorld, drawHUD } from "./render.js";
 import { missionTarget, MISSIONS, enterStage, updateMissions } from "./missions.js";
@@ -104,7 +104,7 @@ function quitToMenu() {
 
 // ---- input wiring ----
 input.onShoot = (sx, sy) => {
-  if (S.mode === "dead") { respawn(); return; }
+  if (S.mode === "dead" || S.mode === "busted") { respawn(); return; }
   if (S.mode === "done") { S.mode = "play"; show(""); return; }
   if (S.mode !== "play") return;
   sound.ensure();
@@ -145,6 +145,7 @@ document.getElementById("btn-resume").addEventListener("click", resumeGame);
 document.getElementById("btn-restart").addEventListener("click", () => startGame(true));
 document.getElementById("btn-quit").addEventListener("click", quitToMenu);
 document.getElementById("btn-respawn").addEventListener("click", respawn);
+document.getElementById("btn-busted-respawn").addEventListener("click", respawn);
 document.getElementById("btn-roam").addEventListener("click", () => { S.mode = "play"; show(""); });
 
 function respawn() {
@@ -152,6 +153,9 @@ function respawn() {
   S.player.hp = 100;
   S.wanted = 0;
   S.lastCrime = S.time;
+  // v4: a fresh start also clears the decay and arrest clocks.
+  S.decayT = 0; S.decayActive = false;
+  S.arrestT = 0; S.arrestCop = null;
   if (S.inCar && S.car) { S.car.driven = false; S.car = null; S.inCar = false; }
   S.camera.x = SPAWN.x; S.camera.y = SPAWN.y;
   S.mode = "play";
@@ -178,6 +182,12 @@ function frame(now) {
         `You went down in ${MISSIONS[Math.min(S.missionIndex, 4)].name}. The clinic patched you up.`;
       show("screen-dead");
     }
+    // v4: BUSTED — a slow cop held the player on foot at low wanted.
+    if (S.mode === "busted") {
+      document.getElementById("busted-info").textContent =
+        `The Sunshine PD caught you on foot. Bail paid: $${S.bailPaid}. The heat is off — for now.`;
+      show("screen-busted");
+    }
     if (S.missionIndex >= MISSIONS.length && S.mode === "play" && !S.storyShown) {
       // Story finished once: show the wrap screen, then free roam.
       S.storyShown = true;
@@ -190,6 +200,9 @@ function frame(now) {
     if (input.consume("KeyN")) input.onNewGame();
     if (input.consume("KeyQ")) input.onQuit();
   } else if (S.mode === "dead") {
+    if (input.consume("Space")) respawn();
+    if (input.consume("KeyN")) input.onNewGame();
+  } else if (S.mode === "busted") {
     if (input.consume("Space")) respawn();
     if (input.consume("KeyN")) input.onNewGame();
   } else if (S.mode === "done") {
@@ -246,6 +259,16 @@ function dist2(x, y) { return Math.hypot(x, y); }
 // ---- debug / test API (used by the local harness and screenshots) ----
 function snapshot() {
   const tgt = missionTarget(S);
+  // v4 test hooks: cop spacing, cop distance to the player, decay clock.
+  let minCopGap = null, minCopPlayer = null;
+  for (let a = 0; a < S.cops.length; a++) {
+    const dc = Math.round(Math.hypot(S.cops[a].x - S.player.x, S.cops[a].y - S.player.y));
+    if (minCopPlayer === null || dc < minCopPlayer) minCopPlayer = dc;
+    for (let b = a + 1; b < S.cops.length; b++) {
+      const g = Math.round(Math.hypot(S.cops[a].x - S.cops[b].x, S.cops[a].y - S.cops[b].y));
+      if (minCopGap === null || g < minCopGap) minCopGap = g;
+    }
+  }
   return {
     mode: S.mode,
     x: Math.round(S.player.x), y: Math.round(S.player.y),
@@ -261,6 +284,13 @@ function snapshot() {
     carHp: S.inCar && S.car ? Math.round(S.car.hp) : null,
     cops: S.cops.length,
     distance: tgt ? Math.round(Math.hypot(S.player.x - tgt.x, S.player.y - tgt.y)) : 0,
+    decayT: Math.round(S.decayT * 10) / 10,
+    decayActive: S.decayActive,
+    arrestT: Math.round(S.arrestT * 10) / 10,
+    bustedCount: S.bustedCount,
+    minCopGap, minCopPlayer,
+    hintVisible: S.hintVisible,
+    hudBoxes: S.hudBoxes.length,
   };
 }
 function teleport(x, y) {
@@ -336,6 +366,10 @@ function pose(name) {
 window.SUNSHINE = {
   state: null, // replaced below with a live getter
   snapshot, teleport, start: startGame, setWanted, target: () => missionTarget(S), pose,
+  // v4 test hooks: the car E would take, the hint flag, and the HUD boxes.
+  canSteal: () => stealableCar(S) !== null,
+  hintVisible: () => S.hintVisible,
+  hudBoxes: () => S.hudBoxes,
 };
 Object.defineProperty(window.SUNSHINE, "state", { get: () => S });
 

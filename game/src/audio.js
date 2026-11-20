@@ -81,6 +81,12 @@ export class SoundEngine {
     setTimeout(() => this.blip(1568, 0.2, "sine", 0.14), 180);
   }
   siren() { this.blip(700, 0.4, "sine", 0.05, 950); }
+  // v4: two-note fall for a lost wanted star, low two-tone sting for BUSTED.
+  decay() { this.blip(660, 0.12, "sine", 0.1); setTimeout(() => this.blip(440, 0.18, "sine", 0.1), 120); }
+  busted() {
+    this.blip(220, 0.25, "sawtooth", 0.12, 110);
+    setTimeout(() => this.blip(165, 0.4, "sawtooth", 0.12, 82), 220);
+  }
   startEngine() {
     if (!this.ensure()) return;
     try {

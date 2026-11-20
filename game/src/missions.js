@@ -8,7 +8,7 @@ export const MISSIONS = [
     name: "Mission 1 — Hot Wheels",
     reward: 200,
     stages: [
-      { text: "Steal a car", target: { x: 980, y: 1180 }, hint: "The red car west of the clinic is unlocked. Press E near it." },
+      { text: "Steal a car", target: { x: 980, y: 1180 }, hint: "Red car west of the clinic — press E near it." },
       { text: "Drive to Marina Bay", target: { x: 700, y: 1880 }, hint: "Follow the yellow arrow to the marina." },
     ],
   },
@@ -57,6 +57,19 @@ export function missionText(S) {
   const m = MISSIONS[S.missionIndex];
   const st = m.stages[Math.min(S.stage, m.stages.length - 1)];
   return m.name + " · " + st.text;
+}
+// v4: the small hint line under the mission banner — the stage's own
+// hint when it has one, else a plain pointer to the target.
+export function missionHint(S) {
+  if (S.missionIndex >= MISSIONS.length) return "Free roam — Sunshine City is yours";
+  const m = MISSIONS[S.missionIndex];
+  const st = m.stages[Math.min(S.stage, m.stages.length - 1)];
+  if (st.hint) return st.hint;
+  if (S.missionIndex === 1) return "Race the checkpoints — follow the yellow arrow.";
+  if (S.missionIndex === 2) return "Parcel run — keep the car in one piece.";
+  if (S.missionIndex === 3) return "Lose the heat — break line of sight and hide.";
+  if (S.missionIndex === 4) return "Take down the dock crew — all five.";
+  return "Follow the yellow arrow to the target.";
 }
 
 // Called when a mission stage begins (e.g. spawning foes, setting wanted).
@@ -109,7 +122,13 @@ export function updateMissions(S, sound) {
   const p = S.player;
   if (S.missionIndex === 0 && S.stage === 0) {
     // Stage 0 completes the moment Kai is behind a wheel.
-    if (S.inCar) { S.stage = 1; if (sound) sound.pickup(); }
+    if (S.inCar) {
+      S.stage = 1;
+      // v4: getting in the car ends any foot arrest that was building.
+      S.arrestT = 0;
+      S.arrestCop = null;
+      if (sound) sound.pickup();
+    }
     return;
   }
   if (S.missionIndex === 4 && S.stage === 1) {

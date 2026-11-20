@@ -2,7 +2,8 @@
 // Desktop: WASD/arrows, Shift run, E car, R reload, Space shoot,
 // P/Esc pause, M mute, N new game, Q quit. Touch: virtual joystick on
 // the left, SHOOT / CAR / RELOAD / PAUSE buttons (>=44px) on the right,
-// shown only on touch devices. Written fresh in this session (v3).
+// shown on any touch screen — detected several ways, with a first-touch
+// fallback (v4). Written fresh in this session (v3, touch reworked v4).
 import { clamp } from "./config.js";
 
 export class Input {
@@ -11,7 +12,13 @@ export class Input {
     this.keys = {};
     this.mouseX = 0; this.mouseY = 0; this.mouseDown = false; this.mouseSeen = false;
     this.joy = { active: false, x: 0, y: 0, id: null };
-    this.touch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
+    // v4: detect touch several ways, not just one flag at load — and
+    // switch the controls on at the first real touch even if detection
+    // missed (some in-app browsers report no touch points until used).
+    this.touch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0
+      || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)
+      || new URLSearchParams(location.search).get("touch") === "1";
+    this.touchUIOn = false;
     this.onShoot = null;      // fn(worldX, worldY)
     this.onEnterCar = null;   // fn()
     this.onReload = null;     // fn()
@@ -44,10 +51,23 @@ export class Input {
     window.addEventListener("mouseup", () => { this.mouseDown = false; });
     this.bindTouch();
   }
+  // Show the touch controls (idempotent). Called at load when touch is
+  // detected, and again on the first real touch anywhere on the page.
+  showTouchUI() {
+    if (this.touchUIOn) return;
+    const ui = document.getElementById("touch-ui");
+    if (!ui) return;
+    ui.classList.add("on");
+    this.touchUIOn = true;
+    this.touch = true;
+  }
   bindTouch() {
     const ui = document.getElementById("touch-ui");
     if (!ui) return;
-    if (this.touch) ui.classList.add("on");
+    if (this.touch) this.showTouchUI();
+    // First-touch fallback: a touch screen that reported no touch
+    // points at load still gets its controls the moment it is used.
+    window.addEventListener("touchstart", () => this.showTouchUI(), { passive: true });
     const joyZone = document.getElementById("joy-zone");
     const knob = document.getElementById("joy-knob");
     if (!joyZone || !knob) return;
@@ -56,6 +76,7 @@ export class Input {
     };
     joyZone.addEventListener("touchstart", (e) => {
       e.preventDefault();
+      this.showTouchUI();
       const t = e.changedTouches[0];
       this.joy.active = true; this.joy.id = t.identifier;
       this.joy.cx = t.clientX; this.joy.cy = t.clientY;
@@ -86,6 +107,8 @@ export class Input {
     const tap = (id, fn) => {
       const el = document.getElementById(id);
       if (!el) return;
+      // touchstart fires the action; the click is swallowed so a tap
+      // never double-fires, and a mouse click still works on desktop.
       el.addEventListener("touchstart", (e) => { e.preventDefault(); e.stopPropagation(); fn(); }, { passive: false });
       el.addEventListener("click", (e) => { e.preventDefault(); });
     };

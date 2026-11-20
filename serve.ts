@@ -25,7 +25,8 @@ const server = createServer(async (req, res) => {
     const file = join(root, normalize(rel).replace(/^(\.\.[/\\])+/, ""));
     if (!file.startsWith(root)) { res.writeHead(403); res.end("forbidden"); return; }
     const data = await readFile(file);
-    res.writeHead(200, { "content-type": types[extname(file)] || "application/octet-stream" });
+    // v4: never serve a stale game while play-testing a fix build.
+    res.writeHead(200, { "content-type": types[extname(file)] || "application/octet-stream", "cache-control": "no-store" });
     res.end(data);
   } catch {
     res.writeHead(404);
@@ -33,4 +34,4 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(8080, () => console.log("Sunshine City at http://localhost:8080"));
+server.listen(8080, () => console.log("Sunshine City v4 at http://localhost:8080"));
