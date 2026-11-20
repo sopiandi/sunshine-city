@@ -4,104 +4,111 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <link rel="icon" href="data:,">
-<title>Sunshine City v3 — open-world crime game</title>
+<title>Sunshine City — an open-world crime game</title>
 <style>
-  :root {
-    --gold: #ffd23a;
-    --ink: #101820;
-    --panel: rgba(10, 16, 28, 0.92);
-  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: var(--ink);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #10151c;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   #game { display: block; touch-action: none; }
-  .hidden { display: none !important; }
-
-  /* Full-screen menu overlays. */
-  .screen { position: fixed; inset: 0; z-index: 10; padding: 24px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; color: #fff;
-    background: linear-gradient(155deg, rgba(16, 32, 52, 0.93), rgba(8, 16, 28, 0.95)); }
-  .screen h1 { font-size: 54px; letter-spacing: 3px; color: var(--gold);
-    text-shadow: 0 4px 0 #b8860b, 0 10px 28px rgba(0, 0, 0, 0.65); }
-  .screen h2 { margin: 8px 0 20px; font-size: 20px; font-weight: 600; color: #7fd4c9; }
-  .screen p { max-width: 580px; margin-bottom: 14px; line-height: 1.6; color: #dfe8f2; }
-  .screen .ver { font-weight: 700; color: var(--gold); }
-  #save-summary { font-weight: 600; color: var(--gold); }
-  #dead-screen h1 { color: #ff2a2a; text-shadow: 0 4px 0 #7a1010, 0 10px 28px rgba(0, 0, 0, 0.65); }
-
-  .btn { min-width: 230px; margin: 6px; padding: 13px 26px; border: none; border-radius: 10px;
-    background: var(--gold); color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; }
-  .btn:hover { background: #ffdd5e; }
-  .btn.ghost { background: transparent; color: #fff; border: 2px solid #fff; }
-  .btn.ghost:hover { background: rgba(255, 255, 255, 0.12); }
-  .keys { margin-top: 18px; font-size: 13px; line-height: 1.8; color: #9fb2c8; }
+  .screen { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    flex-direction: column; background: rgba(8, 12, 18, 0.82); color: #fff; z-index: 20; text-align: center; padding: 20px; }
+  .screen.show { display: flex; }
+  .screen h1 { font-size: 52px; letter-spacing: 2px; color: #ffd60a; text-shadow: 0 3px 0 #b3541e, 0 6px 18px rgba(0,0,0,0.6); }
+  .screen h1 .v { font-size: 20px; color: #fff; vertical-align: super; }
+  .screen h2 { font-size: 26px; color: #ffd60a; margin-bottom: 10px; }
+  .screen p { max-width: 560px; line-height: 1.5; color: #dfe6ee; margin: 8px 0; font-size: 15px; }
+  .screen .tag { color: #8fd0ff; font-weight: bold; }
+  .btn { display: inline-block; margin: 8px 6px 0; padding: 13px 30px; font-size: 17px; font-weight: bold;
+    color: #111; background: #ffd60a; border: none; border-radius: 10px; cursor: pointer; }
+  .btn:hover { background: #ffe45e; }
+  .btn.ghost { background: #2a3340; color: #fff; }
+  .btn.ghost:hover { background: #3a4658; }
+  #save-info, #pause-info, #dead-info { color: #9fe8b4; font-size: 14px; }
+  .keys { font-size: 13px; color: #aab4c0; max-width: 560px; line-height: 1.7; margin-top: 10px; }
   .keys b { color: #fff; }
-
-  /* Touch controls — only visible on touch devices (class added by input.js). */
-  #touch-ui { display: none; position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+  /* Touch controls: only on touch devices (JS adds .on). */
+  #touch-ui { position: fixed; inset: 0; display: none; z-index: 15; pointer-events: none; }
   #touch-ui.on { display: block; }
-  #joy { position: absolute; left: 18px; bottom: 90px; width: 132px; height: 132px;
-    border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35);
-    background: rgba(255, 255, 255, 0.10); pointer-events: auto; }
-  #joy-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px;
-    margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(255, 210, 58, 0.85); }
-  .tbtn { position: absolute; right: 18px; min-width: 64px; min-height: 48px;
-    padding: 10px 12px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.4);
-    background: rgba(16, 24, 32, 0.65); color: #fff; font-size: 15px; font-weight: 700;
+  #joy-zone { position: absolute; left: 14px; bottom: 90px; width: 132px; height: 132px;
+    border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.35);
     pointer-events: auto; }
-  #btn-shoot { bottom: 96px; background: rgba(217, 79, 79, 0.8); }
-  #btn-car { bottom: 160px; }
-  #btn-reload { bottom: 224px; }
-  #btn-pause { bottom: 288px; }
-
-  @media (max-width: 640px) {
+  #joy-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+    border-radius: 50%; background: rgba(255,255,255,0.45); }
+  .tbtn { position: absolute; pointer-events: auto; min-width: 52px; min-height: 52px; padding: 0 12px;
+    border-radius: 12px; border: 2px solid rgba(255,255,255,0.5); background: rgba(20,26,34,0.65);
+    color: #fff; font-weight: bold; font-size: 14px; }
+  .tbtn:active { background: rgba(255,214,10,0.75); color: #111; }
+  #btn-shoot { right: 16px; bottom: 96px; width: 76px; height: 76px; border-radius: 50%; font-size: 15px; }
+  #btn-car { right: 104px; bottom: 170px; }
+  #btn-reload { right: 104px; bottom: 100px; }
+  #btn-pause { right: 16px; top: 150px; }
+  @media (max-width: 480px) {
     .screen h1 { font-size: 36px; }
-    .btn { min-width: 190px; }
+    .screen p { font-size: 14px; }
+    #joy-zone { bottom: 70px; width: 118px; height: 118px; }
+    #btn-shoot { bottom: 76px; }
+    #btn-car { bottom: 148px; }
+    #btn-reload { bottom: 80px; }
+    #btn-pause { top: 170px; }
   }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
 
-<div id="start-screen" class="screen">
-  <h1>SUNSHINE CITY</h1>
-  <h2>An open-world crime story &middot; <span class="ver">v3</span></h2>
-  <p>You are <b>Kai Reyes</b>, a wheelman with nothing but a borrowed jacket and a
-  debt to pay. Steal cars, outrun the Sunshine PD, run jobs for Rosa across
-  Marina Bay and the Old Docks — and stay alive long enough to get paid.</p>
-  <p id="save-summary" class="hidden"></p>
-  <button id="btn-new" class="btn">New Game</button>
-  <button id="btn-continue" class="btn ghost hidden">Continue</button>
-  <p class="keys">
-    <b>WASD / arrows</b> walk &amp; drive &middot; <b>Shift</b> run &middot; <b>E</b> enter / steal car<br>
-    <b>Space / click</b> shoot &middot; <b>R</b> reload &middot; <b>P</b> pause &middot; <b>M</b> mute &middot; <b>N</b> new game &middot; <b>Q</b> quit<br>
-    Touch: left joystick to move &amp; steer, buttons to shoot, enter a car, reload and pause.
-  </p>
-</div>
-
-<div id="pause-screen" class="screen hidden">
-  <h1>PAUSED</h1>
-  <h2>Your progress is saved.</h2>
-  <button id="btn-resume" class="btn">Resume</button>
-  <button id="btn-quit" class="btn ghost">Quit to Menu</button>
-  <button id="btn-mute" class="btn ghost">Mute / Unmute (M)</button>
-</div>
-
-<div id="dead-screen" class="screen hidden">
-  <h1>WASTED</h1>
-  <h2>The clinic patched you up — $100 hospital bill.</h2>
-  <button id="btn-respawn" class="btn">Get Up</button>
-</div>
-
 <div id="touch-ui">
-  <div id="joy"><div id="joy-knob"></div></div>
-  <button id="btn-shoot" class="tbtn" data-key="Space">SHOOT</button>
-  <button id="btn-car" class="tbtn" data-key="KeyE">CAR</button>
-  <button id="btn-reload" class="tbtn" data-key="KeyR">RELOAD</button>
-  <button id="btn-pause" class="tbtn" data-key="KeyP">II</button>
+  <div id="joy-zone"><div id="joy-knob"></div></div>
+  <button class="tbtn" id="btn-shoot">SHOOT</button>
+  <button class="tbtn" id="btn-car">CAR</button>
+  <button class="tbtn" id="btn-reload">RELOAD</button>
+  <button class="tbtn" id="btn-pause">II</button>
 </div>
 
-<script type="module" src="src/main.js"></script>
+<div class="screen" id="screen-start">
+  <h1>SUNSHINE CITY <span class="v">v3</span></h1>
+  <p class="tag">An original open-world crime game — no Rockstar names, no borrowed assets.</p>
+  <p>Kai Reyes is back in Sunshine City, broke and wanted. Steal a ride, outrun the
+  Sunshine PD, run parcels for the marina crew and take the docks back — five missions,
+  one sunny city, and a wanted level that follows you everywhere.</p>
+  <p id="save-info">No save yet — start a new story.</p>
+  <div>
+    <button class="btn" id="btn-new">New Game</button>
+    <button class="btn ghost" id="btn-continue" style="display:none">Continue</button>
+  </div>
+  <p class="keys"><b>WASD / arrows</b> move &amp; drive &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp;
+  <b>E</b> enter / steal car &nbsp;·&nbsp; <b>Space / click</b> shoot &nbsp;·&nbsp; <b>R</b> reload<br>
+  <b>P / Esc</b> pause (saves) &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; <b>N</b> new game &nbsp;·&nbsp; <b>Q</b> quit to menu<br>
+  On touch screens: left joystick to move &amp; steer, SHOOT / CAR / RELOAD buttons on the right.</p>
+</div>
+
+<div class="screen" id="screen-pause">
+  <h2>Paused</h2>
+  <p id="pause-info"></p>
+  <p>Your progress is saved. Take a breath — the city will wait.</p>
+  <div>
+    <button class="btn" id="btn-resume">Resume</button>
+    <button class="btn ghost" id="btn-restart">New Game</button>
+    <button class="btn ghost" id="btn-quit">Quit to Menu</button>
+  </div>
+</div>
+
+<div class="screen" id="screen-dead">
+  <h2>You went down</h2>
+  <p id="dead-info"></p>
+  <div>
+    <button class="btn" id="btn-respawn">Respawn at the Clinic</button>
+    <button class="btn ghost" id="btn-quit2" onclick="document.getElementById('btn-quit').click()">Quit to Menu</button>
+  </div>
+  <p class="keys">Press <b>Space</b> to respawn.</p>
+</div>
+
+<div class="screen" id="screen-done">
+  <h2>STORY COMPLETE</h2>
+  <p>Kai Reyes owns Sunshine City now — every mission done, every dollar earned.
+  The city stays open: keep driving, keep dodging the law.</p>
+  <div><button class="btn" id="btn-roam">Keep Roaming</button></div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>

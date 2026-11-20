@@ -1,81 +1,57 @@
-// Sunshine City v3 — world constants, districts and mission definitions.
-// All names, places and characters are original.
-export const WORLD = { w: 2800, h: 2400 };
+// Sunshine City — shared tuning constants and tiny helpers.
+// Written fresh in this session for the v3 rebuild. No outside code.
+export const WORLD_W = 2800;
+export const WORLD_H = 2400;
 
-export const ROADS_X = [300, 650, 1000, 1350, 1700, 2050, 2400];
-export const ROADS_Y = [300, 650, 1000, 1350, 1700, 2050];
-export const ROAD_W = 72;
+export const VX = [300, 700, 1100, 1500, 1900, 2300]; // vertical road centres
+export const HY = [300, 700, 1100, 1500, 1900];       // horizontal road centres
+export const ROAD_HALF = 45;                          // half road width
+export const LANE = 17;                               // lane offset from centre
 
-export const SPAWN = { x: 1330, y: 1125 };
-export const CLINIC = { x: 1180, y: 1040, w: 130, h: 150, name: "Sunshine Clinic" };
-// Starter car: parked, unlocked, west of the clinic, nose toward the exit road.
-export const STARTER_CAR = { x: 960, y: 1155, angle: 0, color: "#e8b23a" };
-export const PARKED_CARS = [
-  { x: 620, y: 780, angle: Math.PI / 2, color: "#3a7bd5" },
-  { x: 620, y: 830, angle: Math.PI / 2, color: "#c94f4f" },
-  { x: 2050, y: 420, angle: 0, color: "#4f9d69" },
-  { x: 1400, y: 2050, angle: -Math.PI / 2, color: "#8a5fc0" },
-  { x: 1750, y: 1500, angle: 0, color: "#d5d5d5" },
-];
+export const PLAYER_R = 13;
+export const CAR_W = 46;
+export const CAR_L = 26;
+export const WALK_SPEED = 155;
+export const RUN_SPEED = 245;
+export const CAR_ACCEL = 520;
+export const CAR_MAX = 540;
+export const CAR_REV = 220;
 
-export const DISTRICTS = [
-  { name: "Marina Bay", x0: 0, y0: 1500, x1: 1150, y1: 2400,
-    ground: "#9db98a", road: "#5a5f6b", build: "#f2e3c6", accent: "#2fa8a0", sign: "#0e7c86" },
-  { name: "Old Docks", x0: 1700, y0: 0, x1: 2800, y1: 1000,
-    ground: "#8a7a5e", road: "#4c463c", build: "#a9805a", accent: "#c96a2c", sign: "#7a3b12" },
-  { name: "Downtown", x0: 0, y0: 0, x1: 2800, y1: 2400,
-    ground: "#8fae7d", road: "#555a66", build: "#cfd6e4", accent: "#e8b23a", sign: "#274b8f" },
-];
+export const MAX_PEDS = 30;
+export const MAX_TRAFFIC = 20;
+export const MAX_COPS = 6;
 
-export function districtAt(x, y) {
-  if (x < 1150 && y >= 1500) return DISTRICTS[0];
-  if (x >= 1700 && y < 1000) return DISTRICTS[1];
-  return DISTRICTS[2];
-}
-
-export const MISSIONS = [
-  {
-    name: "Hot Wheels", pay: 200,
-    intro: "Kai needs wheels. Steal the yellow coupe parked west of the clinic, then drive it to Marina Bay.",
-    stages: [
-      { label: "Steal the yellow car west of the clinic", target: { x: 960, y: 1155 }, kind: "steal" },
-      { label: "Drive to Marina Bay", target: { x: 700, y: 1880 }, kind: "drive" },
-    ],
-  },
-  {
-    name: "Sunshine Sprint", pay: 400,
-    intro: "Rosa bets you can't beat the clock. Hit all three checkpoints in 90 seconds.",
-    stages: [
-      { label: "Checkpoint 1/3 — North Strip", target: { x: 2050, y: 300 }, kind: "drive", time: 90 },
-      { label: "Checkpoint 2/3 — East Docks", target: { x: 2400, y: 1000 }, kind: "drive" },
-      { label: "Checkpoint 3/3 — Marina Bay", target: { x: 350, y: 2050 }, kind: "drive" },
-    ],
-  },
-  {
-    name: "Dockside Drop", pay: 500,
-    intro: "Pick up Rosa's package at the Old Docks and deliver it to the Marina Bay cafe. No questions.",
-    stages: [
-      { label: "Pick up the package at Old Docks", target: { x: 2200, y: 700 }, kind: "goto" },
-      { label: "Deliver to the Marina Bay cafe", target: { x: 900, y: 1900 }, kind: "drive" },
-    ],
-  },
-  {
-    name: "Heat Escape", pay: 600,
-    intro: "The cops are on you. Lose them and reach the safehouse on the south strip.",
-    stages: [
-      { label: "Reach the safehouse — lose the cops", target: { x: 400, y: 2100 }, kind: "escape", wanted: 3 },
-    ],
-  },
-  {
-    name: "Dock War", pay: 1000,
-    intro: "Marlo's crew took the docks. Clear them out, then meet Rosa at the plaza.",
-    stages: [
-      { label: "Clear the dock crew (6 left)", target: { x: 2250, y: 850 }, kind: "combat", foes: 6 },
-      { label: "Meet Rosa at the plaza", target: { x: 1300, y: 1300 }, kind: "goto" },
-    ],
-  },
-];
-
-export const SAVE_KEY = "sunshine-city-v3-save";
 export const START_AMMO = 12;
 export const START_RESERVE = 48;
+export const SHOT_RANGE = 540;
+export const WITNESS_RADIUS = 320;
+export const ENTER_RADIUS = 80; // E radius — hint uses this exact radius
+export const MISSION_RADIUS = 100;
+
+export const SAVE_KEY = "sunshine-city-v3";
+
+export const CAR_COLORS = [
+  "#e33f2f", "#2f7fe3", "#f2b705", "#37b24d", "#8a5cf6",
+  "#e86ba8", "#12a5a0", "#f07b1d", "#c9ced6", "#3a3f4a",
+];
+
+export function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+export function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+export function angleTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }
+export function angDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+// Deterministic small RNG so the city layout is stable between loads.
+export function mulberry(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+export function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
